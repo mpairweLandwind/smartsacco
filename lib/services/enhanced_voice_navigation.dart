@@ -1,7 +1,4 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
-import 'package:flutter_tts/flutter_tts.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:vibration/vibration.dart';
 import 'package:logging/logging.dart';
 import 'smartsacco_audio_manager.dart';

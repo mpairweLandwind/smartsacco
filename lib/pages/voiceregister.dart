@@ -58,7 +58,7 @@ class _VoiceRegisterPageState extends State<VoiceRegisterPage>
   // Initialize enhanced voice navigation
   Future<void> _initializeEnhancedVoiceNavigation() async {
     EnhancedVoiceNavigation().setCurrentScreen('voice_register');
-    
+
     // Listen for navigation events
     EnhancedVoiceNavigation().navigationEventStream.listen((event) {
       _handleNavigationEvent(event);
@@ -214,7 +214,7 @@ class _VoiceRegisterPageState extends State<VoiceRegisterPage>
   // Handle navigation events
   void _handleNavigationEvent(String event) {
     _logger.info('Navigation event: $event');
-    
+
     if (event.startsWith('navigate:')) {
       final screenId = event.split(':')[1];
       _handleScreenNavigation(screenId);
@@ -234,67 +234,6 @@ class _VoiceRegisterPageState extends State<VoiceRegisterPage>
         break;
       default:
         _logger.info('Unknown screen navigation: $screenId');
-    }
-  }
-
-  void _processSpokenInput(String input) {
-    setState(() {
-      isListening = false;
-    });
-
-    if (input.toLowerCase().contains('repeat')) {
-      _repeatCurrentStep();
-      return;
-    }
-
-    if (input.toLowerCase().contains('help')) {
-      _speakHelp();
-      return;
-    }
-
-    if (input.toLowerCase().contains('back')) {
-      _goBackStep();
-      return;
-    }
-
-    // Process input based on current step
-    switch (steps[currentStep]) {
-      case 'fullName':
-        fullName = input.trim();
-        if (fullName.isNotEmpty) {
-          _nextStep();
-        } else {
-          _askForInputAgain("Please say your full name clearly.");
-        }
-        break;
-      case 'email':
-        email = _extractEmail(input);
-        if (_isValidEmail(email)) {
-          _nextStep();
-        } else {
-          _askForInputAgain(
-            "Please say your email address clearly. For example, say 'john dot doe at gmail dot com'.",
-          );
-        }
-        break;
-      case 'phoneNumber':
-        phoneNumber = _extractPhoneNumber(input);
-        if (phoneNumber.isNotEmpty) {
-          _nextStep();
-        } else {
-          _askForInputAgain("Please say your phone number clearly.");
-        }
-        break;
-      case 'pin':
-        pin = _extractPin(input);
-        if (pin.length == 4) {
-          _confirmRegistration();
-        } else {
-          _askForInputAgain(
-            "Please say a 4-digit PIN. For example, say 'one two three four'.",
-          );
-        }
-        break;
     }
   }
 
