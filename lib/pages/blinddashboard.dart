@@ -1,14 +1,30 @@
-// ignore_for_file: deprecated_member_use
-
 import 'package:flutter/material.dart';
-import 'package:flutter_tts/flutter_tts.dart';
-import 'package:logging/logging.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:google_fonts/google_fonts.dart';
+import 'package:intl/intl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../services/smartsacco_audio_manager.dart';
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:smartsacco/pages/loan.dart';
+import 'package:smartsacco/pages/loanapplication.dart';
+import 'package:smartsacco/models/momopayment.dart';
+import 'package:smartsacco/pages/login.dart';
+import 'package:smartsacco/pages/feedback.dart';
+import 'package:smartsacco/models/notification.dart';
 
-final _logger = Logger('VoiceMemberDashboard');
+class SavingsHistory {
+  final double amount;
+  final DateTime date;
+  final String type;
+  final String transactionId;
+
+  SavingsHistory({
+    required this.amount,
+    required this.date,
+    required this.type,
+    required this.transactionId,
+  });
+}
 
 class VoiceMemberDashboard extends StatefulWidget {
   const VoiceMemberDashboard({super.key});
@@ -17,666 +33,1094 @@ class VoiceMemberDashboard extends StatefulWidget {
   State<VoiceMemberDashboard> createState() => _VoiceMemberDashboardState();
 }
 
-class _VoiceMemberDashboardState extends State<VoiceMemberDashboard>
-    with TickerProviderStateMixin {
-  FlutterTts flutterTts = FlutterTts();
-  stt.SpeechToText speech = stt.SpeechToText();
-  bool isListening = false;
-  String spokenText = "";
-  bool isLoading = false;
+class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
+  final Color _savingsColor = const Color(0xFF4CAF50);
+  final Color _activeLoansColor = const Color(0xFF9C27B0);
+  final Color _overdueColor = const Color(0xFFFF9800);
+  final Color _totalDueColor = const Color(0xFF009688);
+  final Color _primaryColor = Colors.blue;
+  final Color _bgColor = const Color(0xFFF5F6FA);
+  final Color _textSecondary = const Color.fromARGB(255, 8, 56, 71);
 
-  // User data
-  String memberName = "";
-  String memberEmail = "";
-  String memberId = "";
-  String userRole = "member";
+  // Voice components
+  late FlutterTts _flutterTts;
+  late stt.SpeechToText _speechToText;
+  bool _isListening = false;
+  bool _speechEnabled = false;
+  String _lastWords = '';
+  bool _isProcessing = false;
+  bool _isSpeaking = false;
+  String _enteredPin = '';
+  bool _waitingForPin = false;
 
-  // Dashboard data
-  double savingsBalance = 0.0;
-  double loanBalance = 0.0;
-  List<Map<String, dynamic>> recentTransactions = [];
-  List<Map<String, dynamic>> notifications = [];
+  int _currentIndex = 0;
+  int _unreadNotifications = 0;
+  String memberId = '';
+  String memberName = '';
+  String memberEmail = '';
 
-  late AnimationController _fadeController;
-  late AnimationController _pulseController;
-  late Animation<double> _fadeAnimation;
-  late Animation<double> _pulseAnimation;
+  double _currentSavings = 0;
+  List<Loan> _loans = [];
+  List<AppNotification> _notifications = [];
+  List<SavingsHistory> _savingsHistory = [];
+  final List<Transaction> _transactions = [];
+
+  // Voice interaction state
+  VoiceAction _currentVoiceAction = VoiceAction.none;
+  String _pendingConfirmation = '';
+  double _pendingAmount = 0;
+  bool _waitingForConfirmation = false;
+  String _lastInformationType = '';
 
   @override
   void initState() {
     super.initState();
-    _initAnimations();
-    _initTTS();
-    _startDashboardProcess();
+    _initializeSpeech();
+    _initializeTts();
+    _fetchTransactions();
   }
 
-  void _initAnimations() {
-    _fadeController = AnimationController(
-      duration: Duration(seconds: 1),
-      vsync: this,
-    );
-    _pulseController = AnimationController(
-      duration: Duration(seconds: 1),
-      vsync: this,
-    );
+  void _initializeSpeech() async {
+    _speechToText = stt.SpeechToText();
+    try {
+      _speechEnabled = await _speechToText.initialize(
+        onError: (error) {
+          print('Speech recognition error: $error');
+          setState(() {
+            _isListening = false;
+          });
+          _handleSpeechError();
+        },
+        onStatus: (status) {
+          print('Speech recognition status: $status');
+          if (status == 'notListening') {
+            setState(() {
+              _isListening = false;
+            });
+          }
+        },
+      );
+      print('Speech recognition initialized: $_speechEnabled');
+    } catch (e) {
+      print('Error initializing speech recognition: $e');
+      _speechEnabled = false;
+    }
+    setState(() {});
+  }
 
-    _fadeAnimation = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(parent: _fadeController, curve: Curves.easeIn));
+  void _initializeTts() async {
+    _flutterTts = FlutterTts();
+    try {
+      await _flutterTts.setLanguage("en-US");
+      await _flutterTts.setSpeechRate(0.5);
+      await _flutterTts.setVolume(1.0);
+      await _flutterTts.setPitch(1.0);
 
-    _pulseAnimation = Tween<double>(begin: 1.0, end: 1.2).animate(
-      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+      // Set completion handler to automatically start listening
+      _flutterTts.setCompletionHandler(() async {
+        setState(() {
+          _isSpeaking = false;
+          _isProcessing = false;
+        });
+        await Future.delayed(
+          const Duration(milliseconds: 300),
+        ); // let state update
+        if (!_isListening && !_isSpeaking && !_isProcessing) {
+          print("Starting listening after TTS");
+          _startAutoListening();
+        } else {
+          print("Not starting listening. Conditions not met.");
+        }
+      });
+
+      _flutterTts.setStartHandler(() {
+        setState(() {
+          _isSpeaking = true;
+        });
+      });
+
+      _flutterTts.setErrorHandler((msg) {
+        print('TTS Error: $msg');
+        setState(() {
+          _isSpeaking = false;
+        });
+      });
+
+      // Welcome message with automatic listening
+      Future.delayed(const Duration(seconds: 2), () {
+        _speakWelcomeMessage();
+      });
+    } catch (e) {
+      print('Error initializing TTS: $e');
+    }
+    Future.delayed(const Duration(seconds: 6), () {
+      if (!_isListening && !_isSpeaking && !_isProcessing) {
+        _startAutoListening();
+      }
+    });
+  }
+
+  void _speakWelcomeMessage() {
+    _speakAndWaitForResponse(
+      "Welcome to Members Dashboard. I will read you the menu options. "
+      "After I finish, I will listen for your choice. "
+      "Option 3: Check your total savings. "
+      "Option 4: Check active loans and their cost. "
+      "Option 5: Check your amount due. "
+      "Option 6: Make a deposit or save money. "
+      "Option 7: Logout. "
+      "Option 8: Repeat these options. "
+      "Which option would you like to choose? Please say the number.",
     );
   }
 
-  Future<void> _initTTS() async {
-    await flutterTts.setLanguage("en-US");
-    await flutterTts.setSpeechRate(0.5);
-    await flutterTts.setVolume(1.0);
-    await flutterTts.setPitch(1.0);
+  void _handleSpeechError() {
+    if (!_isSpeaking) {
+      _speakAndWaitForResponse(
+        "Sorry, I couldn't understand you clearly. Let me repeat the options. "
+        "Option 3: Check savings. "
+        "Option 4: Check loans. "
+        "Option 5: Check amount due. "
+        "Option 6: Make deposit. "
+        "Option 7: Logout. "
+        "Option 8: Repeat options. "
+        "Which option would you like?",
+      );
+    }
   }
 
-  Future<void> _startDashboardProcess() async {
-    // Register with audio manager
-    SmartSaccoAudioManager().registerScreen(
-      'blindDashboard',
-      flutterTts,
-      speech,
-    );
-    SmartSaccoAudioManager().activateScreenAudio('blindDashboard');
+  Future<void> _speak(String text) async {
+    if (_isSpeaking) {
+      await _flutterTts.stop();
+    }
 
-    _fadeController.forward();
-    _pulseController.repeat(reverse: true);
-
-    await Future.delayed(Duration(seconds: 1));
-    await _loadUserData();
-    await _speakWelcomeMessage();
-  }
-
-  Future<void> _loadUserData() async {
     setState(() {
-      isLoading = true;
+      _isProcessing = true;
+      _isSpeaking = true;
     });
 
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        memberId = user.uid;
-
-        // Get user data from Firestore
-        final userDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(memberId)
-            .get();
-
-        if (userDoc.exists) {
-          final userData = userDoc.data()!;
-          setState(() {
-            memberName = userData['fullName'] ?? 'Member';
-            memberEmail = userData['email'] ?? '';
-            userRole = userData['role'] ?? 'member';
-          });
-
-          // Load dashboard data
-          await _loadDashboardData();
-        }
-      }
+      await _flutterTts.speak(text);
     } catch (e) {
-      _logger.warning("Error loading user data: $e");
-      await SmartSaccoAudioManager().speakIfActive(
-        'blindDashboard',
-        "Error loading your data. Please try again.",
+      print('Error speaking: $e');
+      setState(() {
+        _isSpeaking = false;
+        _isProcessing = false;
+      });
+    }
+  }
+
+  Future<void> _speakAndWaitForResponse(String text) async {
+    await _speak(text);
+    // The TTS completion handler will automatically start listening again
+  }
+
+  void _startAutoListening() {
+    if (!_speechEnabled || _isProcessing || _isSpeaking || _isListening) {
+      print(
+        'Cannot start listening: speechEnabled=$_speechEnabled, processing=$_isProcessing, speaking=$_isSpeaking, listening=$_isListening',
       );
-    } finally {
-      setState(() {
-        isLoading = false;
-      });
+      return;
     }
-  }
 
-  Future<void> _loadDashboardData() async {
-    try {
-      // Load savings balance
-      final savingsDoc = await FirebaseFirestore.instance
-          .collection('savings')
-          .doc(memberId)
-          .get();
+    setState(() {
+      _isListening = true;
+      _isProcessing = false;
+      _lastWords = '';
+    });
 
-      if (savingsDoc.exists) {
-        final savingsData = savingsDoc.data()!;
-        setState(() {
-          savingsBalance = (savingsData['balance'] ?? 0.0).toDouble();
-        });
-      }
-
-      // Load loan balance
-      final loanDoc = await FirebaseFirestore.instance
-          .collection('loans')
-          .doc(memberId)
-          .get();
-
-      if (loanDoc.exists) {
-        final loanData = loanDoc.data()!;
-        setState(() {
-          loanBalance = (loanData['outstandingBalance'] ?? 0.0).toDouble();
-        });
-      }
-
-      // Load recent transactions
-      final transactionsQuery = await FirebaseFirestore.instance
-          .collection('transactions')
-          .where('userId', isEqualTo: memberId)
-          .orderBy('timestamp', descending: true)
-          .limit(5)
-          .get();
-
-      setState(() {
-        recentTransactions = transactionsQuery.docs
-            .map((doc) => doc.data())
-            .toList();
-      });
-
-      // Load notifications
-      final notificationsQuery = await FirebaseFirestore.instance
-          .collection('notifications')
-          .where('userId', isEqualTo: memberId)
-          .orderBy('timestamp', descending: true)
-          .limit(3)
-          .get();
-
-      setState(() {
-        notifications = notificationsQuery.docs
-            .map((doc) => doc.data())
-            .toList();
-      });
-    } catch (e) {
-      _logger.warning("Error loading dashboard data: $e");
-    }
-  }
-
-  Future<void> _speakWelcomeMessage() async {
-    String message =
-        "Welcome to your SmartSacco dashboard, $memberName! Your savings balance is ${savingsBalance.toStringAsFixed(2)} shillings, and your loan balance is ${loanBalance.toStringAsFixed(2)} shillings. Say 'help' for available commands, 'balance' to hear your balances, 'transactions' for recent activity, or 'navigate' to go to other sections.";
+    print('Starting to listen...');
 
     try {
-      await SmartSaccoAudioManager().speakIfActive('blindDashboard', message);
-
-      Future.delayed(Duration(seconds: message.length ~/ 10 + 2), () {
-        if (mounted) {
-          _startListening();
-        }
-      });
-    } catch (e) {
-      _logger.warning("TTS Error: $e");
-      Future.delayed(Duration(seconds: 2), () {
-        if (mounted) {
-          _startListening();
-        }
-      });
-    }
-  }
-
-  Future<void> _startListening() async {
-    try {
-      await speech.stop();
-    } catch (e) {
-      _logger.warning("Error stopping speech: $e");
-    }
-
-    bool available = await speech.initialize(
-      onStatus: (val) {
-        _logger.info("Speech status: $val");
-        if (mounted) {
+      _speechToText.listen(
+        onResult: (result) {
           setState(() {
-            isListening = val == 'listening';
+            _lastWords = result.recognizedWords.toLowerCase();
           });
 
-          if (val == 'notListening' && spokenText.isEmpty) {
-            Future.delayed(Duration(seconds: 1), () {
-              if (mounted && !isListening) {
-                _startListening();
-              }
-            });
-          }
-        }
-      },
-      onError: (val) {
-        _logger.warning("Speech error: $val");
-        if (mounted) {
-          setState(() {
-            isListening = false;
-          });
-          _showError("Sorry, I didn't catch that. Let me try again.");
-        }
-      },
-    );
+          print('Recognized: ${result.recognizedWords}');
 
-    if (available) {
-      if (mounted) {
-        setState(() {
-          isListening = true;
-          spokenText = "";
-        });
-      }
+          if (result.finalResult) {
+            print('Final result: ${result.recognizedWords}');
 
-      speech.listen(
-        onResult: (val) {
-          if (mounted) {
-            setState(() {
-              spokenText = val.recognizedWords;
-            });
-
-            if (val.finalResult) {
-              speech.stop();
-              _processVoiceCommand(val.recognizedWords);
+            if (_lastWords.trim().isEmpty) {
+              _speakAndWaitForResponse(
+                "Sorry, I didn’t hear anything. Please try again. "
+                "Option 3: Check savings. "
+                "Option 4: Check loans. "
+                "Option 5: Check amount due. "
+                "Option 6: Make deposit. "
+                "Option 7: Logout. "
+                "Which option would you like?",
+              );
+            } else {
+              _processVoiceCommand(_lastWords);
             }
           }
         },
-        listenFor: Duration(seconds: 15),
-        pauseFor: Duration(seconds: 5),
+        listenFor: const Duration(seconds: 15), // Longer listening time
+        pauseFor: const Duration(seconds: 3), // Pause before auto-ending
         partialResults: true,
+        localeId: "en_US",
+        onSoundLevelChange: (level) {
+          print('Sound level: $level');
+        },
       );
-    } else {
-      _showError("Speech recognition not available. Please try again.");
+    } catch (e) {
+      print('Error starting listening: $e');
+      setState(() {
+        _isListening = false;
+      });
+      _speakAndWaitForResponse(
+        "There was a problem starting the microphone. Please try again.",
+      );
     }
   }
 
-  void _processVoiceCommand(String input) {
+  void _stopListening() {
+    if (_isListening) {
+      _speechToText.stop();
+      setState(() {
+        _isListening = false;
+      });
+      print('Stopped listening');
+    }
+  }
+
+  void _processVoiceCommand(String command) {
+    _stopListening();
+    command = command.trim();
+    print('Processing command: $command');
+
+    if (_waitingForPin) {
+      _handlePinInput(command);
+      return;
+    }
+
+    if (_waitingForConfirmation) {
+      _handleConfirmationResponse(command);
+      return;
+    }
+
+    if (_currentVoiceAction == VoiceAction.deposit ||
+        _currentVoiceAction == VoiceAction.withdraw) {
+      _handleAmountInput(command);
+      return;
+    }
+
+    // Handle quick deposit option
+    if (command.contains('quick deposit') || 
+        command.contains('quick save') ||
+        command.contains('fast deposit') ||
+        command.contains('fast save')) {
+      _handleQuickDeposit();
+      return;
+    }
+
+    // Handle main menu options with enhanced deposit triggers
+    if (command.contains('3') || command.contains('three')) {
+      _confirmChoice("3", "check your total savings");
+    } else if (command.contains('4') || command.contains('four')) {
+      _confirmChoice("4", "check active loans and their cost");
+    } else if (command.contains('5') || command.contains('five')) {
+      _confirmChoice("5", "check your amount due");
+    } else if (command.contains('6') || 
+               command.contains('six') ||
+               command.contains('deposit') ||
+               command.contains('save') ||
+               command.contains('saving') ||
+               command.contains('money') ||
+               command.contains('add money') ||
+               command.contains('put money') ||
+               command.contains('contribute') ||
+               command.contains('investment')) {
+      _confirmChoice("6", "make a deposit or save money");
+    } else if (command.contains('7') || command.contains('seven')) {
+      _confirmChoice("7", "logout");
+    } else if (command.contains('8') ||
+        command.contains('eight') ||
+        command.contains('repeat')) {
+      _repeatOptions();
+    } else {
+      _speakAndWaitForResponse(
+        "I didn't understand that. Please say a number from 3 to 8. "
+        "Option 3: Check savings. "
+        "Option 4: Check loans. "
+        "Option 5: Check amount due. "
+        "Option 6: Make deposit. "
+        "Option 7: Logout. "
+        "Option 8: Repeat options. "
+        "Which option?",
+      );
+    }
+  }
+
+  void _handlePinInput(String command) {
+    final cleanedPin = command.replaceAll(RegExp(r'[^0-9]'), '');
+
+    if (cleanedPin.length == 4) {
+      _verifyPinAndDeposit(cleanedPin);
+    } else {
+      _speakAndWaitForResponse(
+        "I didn’t catch a valid 4-digit PIN. Please try again.",
+      );
+    }
+  }
+
+  Future<void> _verifyPinAndDeposit(String pin) async {
+    _waitingForPin = false;
+
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(memberId)
+          .get();
+
+      final storedPin = doc['pin'] ?? '';
+
+      if (storedPin == pin) {
+        _processDeposit(_pendingAmount, 'Voice PIN');
+        _speakAndWaitForResponse(
+          "Deposit successful. Your new balance is ${_formatCurrencyForSpeech(_currentSavings + _pendingAmount)} Uganda Shillings. Say yes to return to the main menu.",
+        );
+        _resetVoiceState();
+      } else {
+        _speakAndWaitForResponse(
+          "Incorrect PIN. Please say your 4-digit PIN again.",
+        );
+        _waitingForPin = true;
+      }
+    } catch (e) {
+      print("PIN verification error: $e");
+      _speakAndWaitForResponse("Error verifying PIN. Please try again.");
+    }
+  }
+
+  void _repeatOptions() {
+    _speakAndWaitForResponse(
+      "Here are your options again. "
+      "Option 3: Check your total savings. "
+      "Option 4: Check active loans and their cost. "
+      "Option 5: Check your amount due. "
+      "Option 6: Make a deposit. "
+      "Option 7: Logout. "
+      "Option 8: Repeat these options. "
+      "Which option would you like to choose?",
+    );
+  }
+
+  void _confirmChoice(String option, String description) {
     setState(() {
-      isListening = false;
+      _waitingForConfirmation = true;
+      _pendingConfirmation = option;
     });
 
-    String command = input.toLowerCase().trim();
+    _speakAndWaitForResponse(
+      "Did you say option $option to $description? Please say yes to confirm or no to go back to the menu.",
+    );
+  }
 
-    if (command.contains('help')) {
-      _speakHelp();
-    } else if (command.contains('balance') || command.contains('balances')) {
-      _speakBalances();
-    } else if (command.contains('transaction') ||
-        command.contains('activity')) {
-      _speakTransactions();
-    } else if (command.contains('notification') ||
-        command.contains('message')) {
-      _speakNotifications();
-    } else if (command.contains('navigate') ||
-        command.contains('go to') ||
-        command.contains('menu')) {
-      _speakNavigationOptions();
-    } else if (command.contains('deposit') || command.contains('save')) {
-      _navigateToDeposit();
-    } else if (command.contains('withdraw') || command.contains('take out')) {
-      _navigateToWithdraw();
-    } else if (command.contains('loan') || command.contains('borrow')) {
-      _navigateToLoan();
-    } else if (command.contains('payment') || command.contains('pay')) {
-      _navigateToPayment();
-    } else if (command.contains('statement') || command.contains('report')) {
-      _navigateToStatement();
-    } else if (command.contains('settings') || command.contains('profile')) {
-      _navigateToSettings();
-    } else if (command.contains('logout') || command.contains('sign out')) {
-      _logout();
+  void _handleConfirmationResponse(String response) {
+    setState(() {
+      _waitingForConfirmation = false;
+    });
+
+    if (response.contains('yes') || response.contains('confirm')) {
+      // Handle the confirmed action based on current state
+      if (_currentVoiceAction == VoiceAction.deposit ||
+          _currentVoiceAction == VoiceAction.withdraw) {
+        _handleConfirmation(); // Process the transaction
+      } else {
+        _executeChoice(_pendingConfirmation); // Execute the menu choice
+      }
+    } else if (response.contains('no') || response.contains('cancel')) {
+      _handleCancellation(); // Cancel and return to appropriate state
     } else {
-      _showError(
-        "I didn't understand that command. Say 'help' for available options.",
+      // Didn't understand the response, ask again
+      _speakAndWaitForResponse(
+        "Please say yes to confirm or no to cancel. Did you want to proceed?",
       );
+      setState(() {
+        _waitingForConfirmation = true;
+      });
     }
   }
 
-  void _speakHelp() {
-    SmartSaccoAudioManager().speakIfActive(
-      'blindDashboard',
-      "Available commands: Say 'balance' to hear your account balances, 'transactions' for recent activity, 'notifications' for messages, 'navigate' for menu options, 'deposit' to add money, 'withdraw' to take out money, 'loan' for loan services, 'payment' to make payments, 'statement' for reports, 'settings' for your profile, or 'logout' to sign out.",
+  void _executeChoice(String option) {
+    switch (option) {
+      case "3":
+        _speakSavingsInfo();
+        break;
+      case "4":
+        _speakLoansInfo();
+        break;
+      case "5":
+        _speakDueInfo();
+        break;
+      case "6":
+        _initiateVoiceDeposit();
+        break;
+      case "7":
+        _confirmLogout();
+        break;
+    }
+  }
+
+  void _speakSavingsInfo() {
+    _lastInformationType = 'savings';
+    final formattedSavings = _formatCurrencyForSpeech(_currentSavings);
+    _speakAndWaitForResponse(
+      "Your total savings balance is $formattedSavings Uganda Shillings. "
+      "You have ${_savingsHistory.length} transactions in your savings history. "
+      "Would you like to return to the main menu? Say yes to go back to the menu.",
     );
   }
 
-  void _speakBalances() {
-    String message =
-        "Your savings balance is ${savingsBalance.toStringAsFixed(2)} shillings, and your loan balance is ${loanBalance.toStringAsFixed(2)} shillings.";
+  void _speakLoansInfo() {
+    _lastInformationType = 'loans';
+    final activeLoans = _loans
+        .where((loan) => loan.status == 'Active')
+        .toList();
+    final overdueLoans = _loans
+        .where((loan) => loan.status == 'Overdue')
+        .toList();
 
-    SmartSaccoAudioManager().speakIfActive('blindDashboard', message);
+    String message = "";
+
+    if (activeLoans.isEmpty && overdueLoans.isEmpty) {
+      message = "You currently have no active or overdue loans. ";
+    } else {
+      if (activeLoans.isNotEmpty) {
+        final totalActiveCost = activeLoans.fold(
+          0.0,
+          (sum, loan) => sum + loan.remainingBalance,
+        );
+        message +=
+            "You have ${activeLoans.length} active loans. "
+            "Total remaining balance is ${_formatCurrencyForSpeech(totalActiveCost)} Uganda Shillings. ";
+      }
+
+      if (overdueLoans.isNotEmpty) {
+        final totalOverdueCost = overdueLoans.fold(
+          0.0,
+          (sum, loan) => sum + loan.remainingBalance,
+        );
+        message +=
+            "You have ${overdueLoans.length} overdue loans. "
+            "Total overdue amount is ${_formatCurrencyForSpeech(totalOverdueCost)} Uganda Shillings. ";
+      }
+    }
+
+    message +=
+        "Would you like to return to the main menu? Say yes to go back to the menu.";
+    _speakAndWaitForResponse(message);
   }
 
-  void _speakTransactions() {
-    if (recentTransactions.isEmpty) {
-      SmartSaccoAudioManager().speakIfActive(
-        'blindDashboard',
-        "You have no recent transactions.",
+  void _speakDueInfo() {
+    _lastInformationType = 'due';
+    final totalDue = _calculateTotalDue();
+    String message = "";
+
+    if (totalDue > 0) {
+      message =
+          "Your total amount due is ${_formatCurrencyForSpeech(totalDue)} Uganda Shillings. "
+          "This includes all upcoming loan payments. ";
+    } else {
+      message = "You have no payments due at this time. ";
+    }
+
+    message +=
+        "Would you like to return to the main menu? Say yes to go back to the menu.";
+    _speakAndWaitForResponse(message);
+  }
+
+  void _initiateVoiceDeposit() {
+    setState(() {
+      _currentVoiceAction = VoiceAction.deposit;
+    });
+    
+    _speakAndWaitForResponse(
+      "To make a deposit or save money, please tell me the amount you want to deposit. "
+      "You can say the amount in different ways. For example: "
+      "'fifty thousand' for 50,000 Uganda Shillings, "
+      "'one hundred thousand' for 100,000 Uganda Shillings, "
+      "'two hundred fifty thousand' for 250,000 Uganda Shillings. "
+      "You can also say 'quick deposit' for common amounts like 10,000, 25,000, 50,000, or 100,000 shillings. "
+      "What amount would you like to deposit or save?",
+    );
+  }
+
+  void _handleQuickDeposit() {
+    _speakAndWaitForResponse(
+      "Quick deposit options: "
+      "Say 'ten thousand' for 10,000 shillings, "
+      "'twenty five thousand' for 25,000 shillings, "
+      "'fifty thousand' for 50,000 shillings, "
+      "'one hundred thousand' for 100,000 shillings, "
+      "or say any other amount you prefer. "
+      "What amount would you like?",
+    );
+  }
+
+  void _handleAmountInput(String spokenAmount) {
+    final amount = _parseSpokenAmount(spokenAmount);
+
+    if (amount <= 0) {
+      String actionType = _currentVoiceAction == VoiceAction.deposit
+          ? "deposit or save"
+          : "withdraw";
+      _speakAndWaitForResponse(
+        "I couldn't understand the amount. Please say the amount clearly. "
+        "You can say: 'ten thousand' for 10,000 shillings, "
+        "'fifty thousand' for 50,000 shillings, "
+        "'one hundred thousand' for 100,000 shillings, "
+        "'two hundred fifty thousand' for 250,000 shillings. "
+        "How much would you like to $actionType?",
       );
       return;
     }
 
-    String message = "Your recent transactions: ";
-    for (int i = 0; i < recentTransactions.length && i < 3; i++) {
-      final transaction = recentTransactions[i];
-      final type = transaction['type'] ?? 'transaction';
-      final amount = (transaction['amount'] ?? 0.0).toStringAsFixed(2);
-      final date = transaction['timestamp'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(
-              transaction['timestamp'].millisecondsSinceEpoch,
-            ).toString().substring(0, 10)
-          : 'unknown date';
+    setState(() {
+      _pendingAmount = amount;
+      _waitingForConfirmation = true;
+    });
 
-      message += "${i + 1}. $type of $amount shillings on $date. ";
-    }
-
-    SmartSaccoAudioManager().speakIfActive('blindDashboard', message);
+    String actionType = _currentVoiceAction == VoiceAction.deposit
+        ? "deposit or save"
+        : "withdraw";
+    _speakAndWaitForResponse(
+      "You want to $actionType ${_formatCurrencyForSpeech(amount)} Uganda Shillings. "
+      "Is this correct? Say yes to confirm or no to try again.",
+    );
   }
 
-  void _speakNotifications() {
-    if (notifications.isEmpty) {
-      SmartSaccoAudioManager().speakIfActive(
-        'blindDashboard',
-        "You have no new notifications.",
+  void _confirmLogout() {
+    setState(() {
+      _currentVoiceAction = VoiceAction.logout;
+      _waitingForConfirmation = true;
+    });
+
+    _speakAndWaitForResponse(
+      "Are you sure you want to logout? Say yes to confirm or no to go back to the menu.",
+    );
+  }
+
+  void _handleConfirmation() {
+    switch (_currentVoiceAction) {
+      case VoiceAction.logout:
+        _logout();
+        break;
+      case VoiceAction.deposit:
+        // Request the PIN instead of processing payment
+        _waitingForPin = true;
+        _speakAndWaitForResponse(
+          "Please say your 4-digit PIN to confirm the deposit.",
+        );
+        break;
+      default:
+        _returnToMainMenu();
+    }
+
+    if (_currentVoiceAction != VoiceAction.deposit) {
+      _resetVoiceState();
+    }
+  }
+
+  void _handleCancellation() {
+    if (_currentVoiceAction == VoiceAction.deposit ||
+        _currentVoiceAction == VoiceAction.withdraw) {
+      String actionType = _currentVoiceAction == VoiceAction.deposit
+          ? "deposit"
+          : "withdraw";
+      setState(() {
+        _waitingForConfirmation = false;
+        _pendingAmount = 0;
+        // Keep the current action so they can try again
+      });
+      _speakAndWaitForResponse(
+        "Let's try again. How much would you like to $actionType?",
       );
-      return;
+    } else {
+      _returnToMainMenu();
+    }
+  }
+
+  void _returnToMainMenu() {
+    _resetVoiceState();
+    _speakAndWaitForResponse(
+      "Returning to main menu. "
+      "Option 3: Check savings. "
+      "Option 4: Check loans. "
+      "Option 5: Check amount due. "
+      "Option 6: Make deposit. "
+      "Option 7: Logout. "
+      "Option 8: Repeat options. "
+      "Which option would you like?",
+    );
+  }
+
+  void _resetVoiceState() {
+    setState(() {
+      _currentVoiceAction = VoiceAction.none;
+      _pendingAmount = 0;
+      _waitingForConfirmation = false;
+      _pendingConfirmation = '';
+      _lastInformationType = '';
+    });
+  }
+
+  double _parseSpokenAmount(String spokenAmount) {
+    // Enhanced number parsing with more flexible formats
+    String processedAmount = spokenAmount.toLowerCase().trim();
+
+    // Remove common filler words
+    processedAmount = processedAmount
+        .replaceAll('shillings', '')
+        .replaceAll('shilling', '')
+        .replaceAll('uganda', '')
+        .replaceAll('ugandan', '')
+        .replaceAll('amount', '')
+        .replaceAll('of', '')
+        .replaceAll('the', '')
+        .replaceAll('please', '')
+        .replaceAll('want', '')
+        .replaceAll('to', '')
+        .replaceAll('deposit', '')
+        .replaceAll('save', '')
+        .replaceAll('saving', '')
+        .replaceAll('money', '')
+        .replaceAll('add', '')
+        .replaceAll('put', '')
+        .replaceAll('contribute', '')
+        .replaceAll('investment', '')
+        .trim();
+
+    // Handle different number formats
+    processedAmount = processedAmount
+        .replaceAll(' ', '')
+        .replaceAll('thousand', '000')
+        .replaceAll('k', '000')
+        .replaceAll('million', '000000')
+        .replaceAll('m', '000000')
+        .replaceAll('hundred', '00')
+        .replaceAll('hundreds', '00')
+        .replaceAll('hundredth', '00');
+
+    // Handle number words
+    Map<String, String> numberWords = {
+      'zero': '0',
+      'one': '1',
+      'two': '2',
+      'three': '3',
+      'four': '4',
+      'five': '5',
+      'six': '6',
+      'seven': '7',
+      'eight': '8',
+      'nine': '9',
+      'ten': '10',
+      'eleven': '11',
+      'twelve': '12',
+      'thirteen': '13',
+      'fourteen': '14',
+      'fifteen': '15',
+      'sixteen': '16',
+      'seventeen': '17',
+      'eighteen': '18',
+      'nineteen': '19',
+      'twenty': '20',
+      'thirty': '30',
+      'forty': '40',
+      'fifty': '50',
+      'sixty': '60',
+      'seventy': '70',
+      'eighty': '80',
+      'ninety': '90',
+    };
+
+    numberWords.forEach((word, digit) {
+      processedAmount = processedAmount.replaceAll(word, digit);
+    });
+
+    // Handle compound numbers like "twenty five thousand"
+    processedAmount = processedAmount
+        .replaceAll('twentyfive', '25')
+        .replaceAll('twentyfour', '24')
+        .replaceAll('twentythree', '23')
+        .replaceAll('twentytwo', '22')
+        .replaceAll('twentyone', '21')
+        .replaceAll('fifteen', '15')
+        .replaceAll('fourteen', '14')
+        .replaceAll('thirteen', '13')
+        .replaceAll('twelve', '12')
+        .replaceAll('eleven', '11');
+
+    // Remove any remaining non-numeric characters
+    processedAmount = processedAmount.replaceAll(RegExp(r'[^0-9]'), '');
+
+    // Parse the final number
+    double result = double.tryParse(processedAmount) ?? 0;
+
+    // Log for debugging
+    print(
+      'Original: "$spokenAmount" -> Processed: "$processedAmount" -> Result: $result',
+    );
+
+    return result;
+  }
+
+  void _processVoiceDeposit(double amount) {
+    _speak(
+      "Processing deposit of ${_formatCurrencyForSpeech(amount)} Uganda Shillings. Please wait...",
+    );
+
+    // Use mobile money payment
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => MomoPaymentPage(
+          amount: amount,
+          onPaymentComplete: (success) {
+            if (success) {
+              _processDeposit(amount, 'Mobile Money');
+              _speakAndWaitForResponse(
+                "Excellent! Your deposit of ${_formatCurrencyForSpeech(amount)} Uganda Shillings was successful. "
+                "Your new balance is ${_formatCurrencyForSpeech(_currentSavings + amount)} Uganda Shillings. "
+                "Thank you for saving with SmartSacco. "
+                "Would you like to hear the main menu? Say yes for menu.",
+              );
+            } else {
+              _speakAndWaitForResponse(
+                "Deposit was not completed. Please try again or contact support. "
+                "Would you like to hear the main menu? Say yes for menu.",
+              );
+            }
+            _resetVoiceState();
+          },
+        ),
+      ),
+    );
+  }
+
+  void _speakDepositSuccess(double amount) {
+    _speakAndWaitForResponse(
+      "Congratulations! Your deposit of ${_formatCurrencyForSpeech(amount)} Uganda Shillings was successful. "
+      "Your new balance is ${_formatCurrencyForSpeech(_currentSavings + amount)} Uganda Shillings. "
+      "Your money is safe with SmartSacco. "
+      "Would you like to make another deposit or return to the main menu? Say 'menu' for main menu or 'deposit' for another deposit.",
+    );
+  }
+
+  String _formatCurrencyForSpeech(double amount) {
+    final formatter = NumberFormat('#,###');
+    return formatter.format(amount);
+  }
+
+  // Keep all existing Firebase methods unchanged
+  Future<void> _fetchTransactions() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      memberId = user.uid;
+
+      final memberDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(memberId)
+          .get();
+
+      setState(() {
+        memberName = memberDoc['fullName'] ?? 'Member';
+        memberEmail = memberDoc['email'] ?? 'member@sacco.com';
+      });
+
+      _fetchSavingsData();
+      _fetchLoansData();
+      _fetchNotifications();
+    }
+  }
+
+  Future<void> _fetchSavingsData() async {
+    final savingsSnapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(memberId)
+        .collection('savings')
+        .orderBy('date', descending: true)
+        .get();
+
+    double totalSavings = 0;
+    List<SavingsHistory> history = [];
+
+    for (var doc in savingsSnapshot.docs) {
+      final amount = doc['amount']?.toDouble() ?? 0;
+      totalSavings += amount;
+      history.add(
+        SavingsHistory(
+          amount: amount,
+          date: doc['date'].toDate(),
+          type: doc['type'] ?? 'Deposit',
+          transactionId: doc.id,
+        ),
+      );
     }
 
-    String message = "Your notifications: ";
-    for (int i = 0; i < notifications.length && i < 3; i++) {
-      final notification = notifications[i];
-      final title = notification['title'] ?? 'Notification';
-      final message_text = notification['message'] ?? '';
+    setState(() {
+      _currentSavings = totalSavings;
+      _savingsHistory = history;
+    });
+  }
 
-      message += "${i + 1}. $title: $message_text. ";
+  Future<void> _fetchLoansData() async {
+    final loansSnapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(memberId)
+        .collection('loans')
+        .where('status', whereIn: ['Active', 'Overdue', 'Pending'])
+        .get();
+
+    List<Loan> loans = [];
+
+    for (var doc in loansSnapshot.docs) {
+      final payments = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(memberId)
+          .collection('loans')
+          .doc(doc.id)
+          .collection('payments')
+          .get();
+
+      loans.add(
+        Loan(
+          id: doc.id,
+          amount: doc['amount']?.toDouble() ?? 0,
+          remainingBalance: doc['remainingBalance']?.toDouble() ?? 0,
+          disbursementDate: doc['disbursementDate']?.toDate() ?? DateTime.now(),
+          dueDate: doc['dueDate']?.toDate() ?? DateTime.now(),
+          status: doc['status'] ?? 'Pending',
+          type: doc['type'] ?? 'Personal',
+          interestRate: doc['interestRate']?.toDouble() ?? 12.0,
+          totalRepayment: doc['totalRepayment']?.toDouble() ?? 0,
+          repaymentPeriod: doc['repaymentPeriod']?.toInt() ?? 12,
+          payments: payments.docs
+              .map(
+                (p) => Payment(
+                  amount: p['amount']?.toDouble() ?? 0,
+                  date: p['date']?.toDate() ?? DateTime.now(),
+                  reference: p['reference'] ?? '',
+                ),
+              )
+              .toList(),
+        ),
+      );
     }
 
-    SmartSaccoAudioManager().speakIfActive('blindDashboard', message);
-  }
-
-  void _speakNavigationOptions() {
-    SmartSaccoAudioManager().speakIfActive(
-      'blindDashboard',
-      "Navigation options: Say 'deposit' to add money to your account, 'withdraw' to take out money, 'loan' for loan services, 'payment' to make payments, 'statement' for your account reports, or 'settings' for your profile settings.",
-    );
-  }
-
-  void _navigateToDeposit() {
-    SmartSaccoAudioManager().speakIfActive(
-      'blindDashboard',
-      "Navigating to deposit page.",
-    );
-    Future.delayed(Duration(seconds: 2), () {
-      if (mounted) {
-        Navigator.pushNamed(context, '/payment');
-      }
+    setState(() {
+      _loans = loans;
     });
   }
 
-  void _navigateToWithdraw() {
-    SmartSaccoAudioManager().speakIfActive(
-      'blindDashboard',
-      "Navigating to withdrawal page.",
-    );
-    Future.delayed(Duration(seconds: 2), () {
-      if (mounted) {
-        Navigator.pushNamed(context, '/payment');
-      }
+  Future<void> _fetchNotifications() async {
+    final notificationsSnapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(memberId)
+        .collection('notifications')
+        .orderBy('date', descending: true)
+        .limit(10)
+        .get();
+
+    int unread = 0;
+    List<AppNotification> notifications = [];
+
+    for (var doc in notificationsSnapshot.docs) {
+      final isRead = doc['isRead'] ?? false;
+      if (!isRead) unread++;
+
+      notifications.add(
+        AppNotification(
+          id: doc.id,
+          title: doc['title'] ?? 'Notification',
+          message: doc['message'] ?? '',
+          date: doc['date']?.toDate() ?? DateTime.now(),
+          type: NotificationType.values[doc['type'] ?? 0],
+          isRead: isRead,
+          actionUrl: doc['actionUrl'],
+        ),
+      );
+    }
+
+    setState(() {
+      _notifications = notifications;
+      _unreadNotifications = unread;
     });
   }
 
-  void _navigateToLoan() {
-    SmartSaccoAudioManager().speakIfActive(
-      'blindDashboard',
-      "Navigating to loan services.",
-    );
-    Future.delayed(Duration(seconds: 2), () {
-      if (mounted) {
-        Navigator.pushNamed(context, '/loan');
-      }
-    });
-  }
+  Future<void> _processDeposit(double amount, String method) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(memberId)
+          .collection('savings')
+          .add({
+            'amount': amount,
+            'date': DateTime.now(),
+            'type': 'Deposit',
+            'method': method,
+          });
 
-  void _navigateToPayment() {
-    SmartSaccoAudioManager().speakIfActive(
-      'blindDashboard',
-      "Navigating to payment page.",
-    );
-    Future.delayed(Duration(seconds: 2), () {
-      if (mounted) {
-        Navigator.pushNamed(context, '/payment');
-      }
-    });
-  }
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(memberId)
+          .collection('transactions')
+          .add({
+            'amount': amount,
+            'date': DateTime.now(),
+            'type': 'Deposit',
+            'status': 'Completed',
+            'method': method,
+          });
 
-  void _navigateToStatement() {
-    SmartSaccoAudioManager().speakIfActive(
-      'blindDashboard',
-      "Navigating to statement page.",
-    );
-    Future.delayed(Duration(seconds: 2), () {
-      if (mounted) {
-        Navigator.pushNamed(context, '/statement');
-      }
-    });
-  }
+      setState(() {
+        _currentSavings += amount;
+      });
 
-  void _navigateToSettings() {
-    SmartSaccoAudioManager().speakIfActive(
-      'blindDashboard',
-      "Navigating to settings page.",
-    );
-    Future.delayed(Duration(seconds: 2), () {
-      if (mounted) {
-        Navigator.pushNamed(context, '/settings');
-      }
-    });
+      _fetchSavingsData();
+    } catch (e) {
+      _speakAndWaitForResponse(
+        "Error processing deposit. Please try again or contact support.",
+      );
+    }
   }
 
   void _logout() {
-    SmartSaccoAudioManager().speakIfActive(
-      'blindDashboard',
-      "Logging you out. Thank you for using SmartSacco.",
+    _speak("Logging out. Thank you for using our service.");
+    FirebaseAuth.instance.signOut();
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (context) => const LoginPage()),
+      (route) => false,
     );
-    Future.delayed(Duration(seconds: 3), () async {
-      await FirebaseAuth.instance.signOut();
-      if (mounted) {
-        Navigator.pushReplacementNamed(context, '/splash');
-      }
-    });
   }
 
-  Future<void> _showError(String message) async {
-    await SmartSaccoAudioManager().speakIfActive('blindDashboard', message);
-    Future.delayed(Duration(seconds: message.length ~/ 10 + 2), () {
-      if (mounted) {
-        _startListening();
-      }
-    });
+  double _calculateTotalDue() {
+    return _loans.fold(0, (acc, loan) => acc + loan.nextPaymentAmount);
+  }
+
+  String _formatCurrency(double amount) {
+    return NumberFormat.currency(
+      symbol: 'UGX ',
+      decimalDigits: 0,
+    ).format(amount);
+  }
+
+  // Manual control methods for testing
+  void _manualStartListening() {
+    if (_speechEnabled && !_isListening && !_isSpeaking) {
+      _startAutoListening();
+    }
+  }
+
+  void _manualStopListening() {
+    _stopListening();
   }
 
   @override
   void dispose() {
-    _fadeController.dispose();
-    _pulseController.dispose();
-    flutterTts.stop();
-    speech.stop();
-    SmartSaccoAudioManager().unregisterScreen('blindDashboard');
+    _flutterTts.stop();
+    _speechToText.stop();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.blue.shade50,
-      body: Container(
-        width: double.infinity,
-        height: double.infinity,
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Colors.blue.shade100, Colors.blue.shade50],
+      backgroundColor: _bgColor,
+      appBar: AppBar(
+        title: Text(
+          'Voice Dashboard',
+          style: GoogleFonts.poppins(
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            color: Colors.white,
           ),
         ),
+        backgroundColor: _primaryColor,
+        elevation: 0,
+      ),
+      body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Logo/Icon
-            FadeTransition(
-              opacity: _fadeAnimation,
-              child: Container(
-                width: 100,
-                height: 100,
-                decoration: BoxDecoration(
-                  color: isLoading
-                      ? Colors.orange.shade600
-                      : Colors.blue.shade600,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color:
-                          (isLoading
-                                  ? Colors.orange.shade300
-                                  : Colors.blue.shade300)
-                              .withOpacity(0.5),
-                      spreadRadius: 5,
-                      blurRadius: 15,
-                      offset: Offset(0, 3),
-                    ),
-                  ],
-                ),
-                child: Icon(
-                  isLoading ? Icons.refresh : Icons.dashboard,
-                  size: 50,
-                  color: Colors.white,
-                ),
+            Icon(Icons.record_voice_over, size: 80, color: _primaryColor),
+            const SizedBox(height: 20),
+            Text(
+              'Voice Member Dashboard',
+              style: GoogleFonts.poppins(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: _primaryColor,
               ),
             ),
-
-            SizedBox(height: 30),
-
-            // Title
-            FadeTransition(
-              opacity: _fadeAnimation,
-              child: Text(
-                isLoading ? 'Loading Dashboard' : 'Voice Dashboard',
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.blue.shade800,
-                  letterSpacing: 1.2,
-                ),
-              ),
+            const SizedBox(height: 20),
+            Text(
+              'Welcome, $memberName',
+              style: GoogleFonts.poppins(fontSize: 18, color: _textSecondary),
             ),
-
-            SizedBox(height: 40),
-
-            // Dashboard info
-            FadeTransition(
-              opacity: _fadeAnimation,
-              child: Container(
-                padding: EdgeInsets.all(20),
-                margin: EdgeInsets.symmetric(horizontal: 20),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(15),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.blue.shade200.withOpacity(0.5),
-                      spreadRadius: 2,
-                      blurRadius: 8,
-                      offset: Offset(0, 2),
-                    ),
-                  ],
+            const SizedBox(height: 40),
+            Container(
+              padding: const EdgeInsets.all(20),
+              margin: const EdgeInsets.symmetric(horizontal: 20),
+              decoration: BoxDecoration(
+                color: _isListening
+                    ? Colors.green.withOpacity(0.1)
+                    : Colors.white,
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(
+                  color: _isListening ? Colors.green : Colors.transparent,
+                  width: 2,
                 ),
-                child: Column(
-                  children: [
-                    Text(
-                      "Welcome, $memberName!",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.blue.shade800,
-                      ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.grey.withOpacity(0.2),
+                    spreadRadius: 2,
+                    blurRadius: 5,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: Column(
+                children: [
+                  Icon(
+                    _isListening ? Icons.mic : Icons.mic_off,
+                    size: 40,
+                    color: _isListening ? Colors.green : Colors.grey,
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    _isListening ? 'Listening...' : 'Ready to Listen',
+                    style: GoogleFonts.poppins(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: _isListening ? Colors.green : Colors.grey,
                     ),
-                    SizedBox(height: 15),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        _buildBalanceCard(
-                          "Savings",
-                          savingsBalance,
-                          Colors.green,
-                        ),
-                        _buildBalanceCard("Loan", loanBalance, Colors.red),
-                      ],
-                    ),
-                    if (spokenText.isNotEmpty) ...[
-                      SizedBox(height: 15),
-                      Container(
-                        padding: EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: Colors.blue.shade50,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(
-                          "Heard: \"$spokenText\"",
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontStyle: FontStyle.italic,
-                            color: Colors.blue.shade700,
-                          ),
-                          textAlign: TextAlign.center,
+                  ),
+                  if (_isListening && _lastWords.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Text(
+                        'Heard: "$_lastWords"',
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          color: Colors.grey[600],
                         ),
                       ),
-                    ],
-                  ],
-                ),
+                    ),
+                ],
               ),
             ),
-
-            SizedBox(height: 30),
-
-            // Help button
-            FadeTransition(
-              opacity: _fadeAnimation,
-              child: TextButton.icon(
-                onPressed: _speakHelp,
-                icon: Icon(Icons.help, color: Colors.blue.shade600),
-                label: Text(
-                  "Voice Help",
-                  style: TextStyle(color: Colors.blue.shade600),
-                ),
-              ),
-            ),
+            const SizedBox(height: 40),
           ],
         ),
       ),
     );
   }
-
-  Widget _buildBalanceCard(String title, double amount, Color color) {
-    return Container(
-      padding: EdgeInsets.all(15),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Column(
-        children: [
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: color,
-            ),
-          ),
-          SizedBox(height: 5),
-          Text(
-            "${amount.toStringAsFixed(2)}",
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }
+
+enum VoiceAction { none, deposit, withdraw, logout }

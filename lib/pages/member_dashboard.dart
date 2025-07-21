@@ -13,8 +13,7 @@ import 'package:smartsacco/pages/login.dart';
 import 'package:smartsacco/pages/feedback.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:smartsacco/services/momoservices.dart';
-import 'package:smartsacco/services/smartsacco_audio_manager.dart';
-import 'package:smartsacco/services/enhanced_voice_navigation.dart';
+import 'package:smartsacco/services/user_preferences_service.dart';
 
 class MemberDashboard extends StatefulWidget {
   const MemberDashboard({super.key});
@@ -47,59 +46,23 @@ class _MemberDashboardState extends State<MemberDashboard> {
   FlutterTts flutterTts = FlutterTts();
   bool _awaitingDepositVoiceConfirmation = false;
   final double _pendingDepositAmount = 0;
+  bool _isBlindUser = false;
 
   @override
   void initState() {
     super.initState();
     print('MemberDashboard initialized');
+    _checkUserMode();
     _fetchTransactions();
-    _initializeVoiceNavigation();
   }
 
-  // Initialize voice navigation for member dashboard
-  Future<void> _initializeVoiceNavigation() async {
-    // Initialize enhanced voice navigation
-    EnhancedVoiceNavigation().setCurrentScreen('member_dashboard');
-
-    // Listen for navigation events
-    EnhancedVoiceNavigation().navigationEventStream.listen((event) {
-      _handleNavigationEvent(event);
+  // Check if user is blind to conditionally enable/disable features
+  Future<void> _checkUserMode() async {
+    final accessibilityMode = UserPreferencesService().getAccessibilityMode();
+    setState(() {
+      _isBlindUser = accessibilityMode == 'blind';
     });
-
-    // Provide welcome message
-    await _speakWelcome();
-  }
-
-  // Handle voice commands for member dashboard
-  void _handleVoiceCommand(String command) {
-    print('Voice command received: $command');
-
-    if (command.startsWith('check_balance') || command.contains('balance')) {
-      _speakBalance();
-    } else if (command.startsWith('make_deposit') ||
-        command.contains('deposit')) {
-      _showEnhancedDepositDialog();
-    } else if (command.startsWith('go_loans') ||
-        command.contains('loans') ||
-        command.contains('my loans')) {
-      _navigateToLoans();
-    } else if (command.startsWith('go_transactions') ||
-        command.contains('transactions') ||
-        command.contains('history')) {
-      _navigateToTransactions();
-    } else if (command.startsWith('go_settings') ||
-        command.contains('settings')) {
-      _navigateToSettings();
-    } else if (command.startsWith('apply_loan') ||
-        command.contains('apply loan')) {
-      _navigateToLoanApplication();
-    } else if (command.startsWith('help') || command.contains('help')) {
-      _speakHelp();
-    } else if (command.startsWith('logout') || command.contains('logout')) {
-      _handleLogout();
-    } else if (command.startsWith('go_back') || command.contains('back')) {
-      _handleGoBack();
-    }
+    print('User mode: ${_isBlindUser ? 'Blind' : 'Sighted'}');
   }
 
   // Speak welcome message
@@ -118,9 +81,15 @@ class _MemberDashboardState extends State<MemberDashboard> {
 
   // Speak help information
   Future<void> _speakHelp() async {
-    await flutterTts.speak(
-      "Available commands: check balance, make deposit, my loans, transactions, settings, apply loan, help, logout.",
-    );
+    if (_isBlindUser) {
+      await flutterTts.speak(
+        "Available commands: check balance, make deposit, my loans, transactions, settings, apply loan, help, logout. Note: Withdrawal is not available for blind users for security reasons. Say 'make deposit' to use the voice deposit feature.",
+      );
+    } else {
+      await flutterTts.speak(
+        "Available commands: check balance, withdraw, my loans, transactions, settings, apply loan, help, logout. Note: Use the deposit button for deposits.",
+      );
+    }
   }
 
   // Navigate to loans
@@ -158,44 +127,6 @@ class _MemberDashboardState extends State<MemberDashboard> {
   // Handle go back
   void _handleGoBack() {
     Navigator.pop(context);
-  }
-
-  // Handle navigation events
-  void _handleNavigationEvent(String event) {
-    print('Navigation event: $event');
-
-    if (event.startsWith('navigate:')) {
-      final screenId = event.split(':')[1];
-      _handleScreenNavigation(screenId);
-    } else if (event == 'logout') {
-      _handleLogout();
-    }
-  }
-
-  // Handle screen navigation
-  void _handleScreenNavigation(String screenId) {
-    switch (screenId) {
-      case 'savings':
-        _navigateToSavings();
-        break;
-      case 'loans':
-        _navigateToLoans();
-        break;
-      case 'deposits':
-        _showEnhancedDepositDialog();
-        break;
-      case 'transactions':
-        _navigateToTransactions();
-        break;
-      case 'settings':
-        _navigateToSettings();
-        break;
-      case 'loan_application':
-        _navigateToLoanApplication();
-        break;
-      default:
-        print('Unknown screen navigation: $screenId');
-    }
   }
 
   // Navigate to savings
@@ -250,11 +181,54 @@ class _MemberDashboardState extends State<MemberDashboard> {
 
       print('Member name: $memberName, email: $memberEmail');
 
-      _fetchSavingsData();
-      _fetchLoansData();
-      _fetchNotifications();
+      // Fetch all data in parallel for better performance
+      await Future.wait([
+        _fetchSavingsData(),
+        _fetchLoansData(),
+        _fetchNotifications(),
+        _fetchTransactionHistory(),
+      ]);
     } else {
       print('No current user found in MemberDashboard');
+    }
+  }
+
+  // New method to fetch transaction history
+  Future<void> _fetchTransactionHistory() async {
+    try {
+      final transactionsSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(memberId)
+          .collection('transactions')
+          .orderBy('date', descending: true)
+          .limit(50)
+          .get();
+
+      List<Transaction> transactions = [];
+
+      for (var doc in transactionsSnapshot.docs) {
+        final data = doc.data();
+        transactions.add(
+          Transaction(
+            id: doc.id,
+            amount: data['amount']?.toDouble() ?? 0,
+            type: data['type'] ?? 'Unknown',
+            date: data['date']?.toDate() ?? DateTime.now(),
+            status: data['status'] ?? 'Pending',
+            method: data['method'] ?? 'Unknown',
+            description: data['description'] ?? '',
+          ),
+        );
+      }
+
+      setState(() {
+        _transactions.clear();
+        _transactions.addAll(transactions);
+      });
+
+      print('Fetched ${transactions.length} transactions');
+    } catch (e) {
+      print('Error fetching transaction history: $e');
     }
   }
 
@@ -282,10 +256,20 @@ class _MemberDashboardState extends State<MemberDashboard> {
       );
     }
 
+    print('📊 Fetched savings data:');
+    print('   - Total savings: ${_formatCurrency(totalSavings)}');
+    print('   - Number of transactions: ${history.length}');
+    print('   - Previous balance: ${_formatCurrency(_currentSavings)}');
+
     setState(() {
       _currentSavings = totalSavings;
       _savingsHistory = history;
     });
+
+    print('   - New balance: ${_formatCurrency(_currentSavings)}');
+    print(
+      '   - Balance change: ${_formatCurrency(totalSavings - _currentSavings)}',
+    );
   }
 
   Future<void> _fetchLoansData() async {
@@ -594,6 +578,9 @@ class _MemberDashboardState extends State<MemberDashboard> {
   }
 
   Future<void> _voiceConfirmDeposit(double amount, String method) async {
+    // Only for blind users
+    if (!_isBlindUser) return;
+
     final confirmMessage =
         "Confirm deposit of ${_formatCurrency(amount)} via $method. Say yes to confirm or no to cancel.";
     await _speak(confirmMessage);
@@ -622,7 +609,7 @@ class _MemberDashboardState extends State<MemberDashboard> {
       );
 
       if (confirmed == true) {
-        await _processDeposit(amount, method);
+        await _processDeposit(amount, method, voiceConfirmed: true);
       }
     }
   }
@@ -775,49 +762,177 @@ class _MemberDashboardState extends State<MemberDashboard> {
     int overdueLoans,
     double totalDue,
   ) {
-    return GridView.count(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisCount: 2,
-      childAspectRatio: 1.3,
-      mainAxisSpacing: 12,
-      crossAxisSpacing: 12,
+    // Calculate additional stats
+    final pendingLoans = _loans
+        .where((loan) => loan.status == 'Pending')
+        .length;
+    final totalDeposits = _savingsHistory
+        .where((item) => item.type.toLowerCase().contains('deposit'))
+        .fold(0.0, (sum, item) => sum + item.amount);
+    final totalWithdrawals = _savingsHistory
+        .where((item) => item.type.toLowerCase().contains('withdraw'))
+        .fold(0.0, (sum, item) => sum + item.amount);
+    final recentTransactions = _savingsHistory.take(5).length;
+
+    // Get screen dimensions for responsive design
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isSmallScreen = screenWidth < 400;
+    final childAspectRatio = isSmallScreen ? 1.5 : 1.3;
+
+    return Column(
       children: [
-        GestureDetector(
-          onTap: () => _showSavingsDetails(),
-          child: _buildStatCard(
-            'Savings',
-            _formatCurrency(savings),
-            _savingsColor,
-            Icons.savings,
-          ),
+        // First row - Main financial info
+        GridView.count(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisCount: 2,
+          childAspectRatio: childAspectRatio,
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+          children: [
+            GestureDetector(
+              onTap: () => _showSavingsDetails(),
+              child: Stack(
+                children: [
+                  _buildStatCard(
+                    'Current Savings',
+                    _formatCurrency(savings),
+                    _savingsColor,
+                    Icons.account_balance_wallet,
+                    subtitle: 'Available Balance',
+                  ),
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: GestureDetector(
+                      onTap: () async {
+                        await _verifyBalanceCalculation();
+                        await _fetchSavingsData();
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(
+                          Icons.refresh,
+                          color: Colors.white,
+                          size: 16,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            GestureDetector(
+              onTap: () => _showActiveLoans(),
+              child: _buildStatCard(
+                'Active Loans',
+                activeLoans.toString(),
+                _activeLoansColor,
+                Icons.credit_card,
+                subtitle: 'Currently Active',
+              ),
+            ),
+          ],
         ),
-        GestureDetector(
-          onTap: () => _showActiveLoans(),
-          child: _buildStatCard(
-            'Active Loans',
-            activeLoans.toString(),
-            _activeLoansColor,
-            Icons.credit_card,
-          ),
+        const SizedBox(height: 12),
+        // Second row - Loan status
+        GridView.count(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisCount: 2,
+          childAspectRatio: childAspectRatio,
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+          children: [
+            GestureDetector(
+              onTap: () => _showPendingLoans(),
+              child: _buildStatCard(
+                'Pending Loans',
+                pendingLoans.toString(),
+                Colors.blue,
+                Icons.pending_actions,
+                subtitle: 'Awaiting Approval',
+              ),
+            ),
+            GestureDetector(
+              onTap: () => _showOverdueLoans(),
+              child: _buildStatCard(
+                'Overdue Loans',
+                overdueLoans.toString(),
+                _overdueColor,
+                Icons.warning,
+                subtitle: 'Requires Attention',
+              ),
+            ),
+          ],
         ),
-        GestureDetector(
-          onTap: () => _showOverdueLoans(),
-          child: _buildStatCard(
-            'Overdue',
-            overdueLoans.toString(),
-            _overdueColor,
-            Icons.warning,
-          ),
+        const SizedBox(height: 12),
+        // Third row - Transaction summary
+        GridView.count(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisCount: 2,
+          childAspectRatio: childAspectRatio,
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+          children: [
+            GestureDetector(
+              onTap: () => _showDepositHistory(),
+              child: _buildStatCard(
+                'Total Deposits',
+                _formatCurrency(totalDeposits),
+                Colors.green,
+                Icons.trending_up,
+                subtitle: 'All Time',
+              ),
+            ),
+            GestureDetector(
+              onTap: () => _showWithdrawalHistory(),
+              child: _buildStatCard(
+                'Total Withdrawals',
+                _formatCurrency(totalWithdrawals),
+                Colors.red,
+                Icons.trending_down,
+                subtitle: 'All Time',
+              ),
+            ),
+          ],
         ),
-        GestureDetector(
-          onTap: () => _showTotalDueDetails(),
-          child: _buildStatCard(
-            'Total Due',
-            _formatCurrency(totalDue),
-            _totalDueColor,
-            Icons.payment,
-          ),
+        const SizedBox(height: 12),
+        // Fourth row - Additional info
+        GridView.count(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisCount: 2,
+          childAspectRatio: childAspectRatio,
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+          children: [
+            GestureDetector(
+              onTap: () => _showTotalDueDetails(),
+              child: _buildStatCard(
+                'Total Due',
+                _formatCurrency(totalDue),
+                _totalDueColor,
+                Icons.payment,
+                subtitle: 'Loan Repayments',
+              ),
+            ),
+            GestureDetector(
+              onTap: () => setState(() => _currentIndex = 2),
+              child: _buildStatCard(
+                'Recent Transactions',
+                recentTransactions.toString(),
+                Colors.purple,
+                Icons.receipt_long,
+                subtitle: 'Last 5 Transactions',
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -827,8 +942,13 @@ class _MemberDashboardState extends State<MemberDashboard> {
     String title,
     String value,
     Color color,
-    IconData icon,
-  ) {
+    IconData icon, {
+    String? subtitle,
+  }) {
+    // Get screen dimensions for responsive design
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isSmallScreen = screenWidth < 400;
+
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -846,35 +966,58 @@ class _MemberDashboardState extends State<MemberDashboard> {
         ],
       ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: Colors.white, size: 28),
-            const SizedBox(height: 8),
-            Text(
-              title,
-              style: GoogleFonts.poppins(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
+            Icon(icon, color: Colors.white, size: isSmallScreen ? 24 : 28),
+            SizedBox(height: isSmallScreen ? 6 : 8),
+            Flexible(
+              child: Text(
+                title,
+                style: GoogleFonts.poppins(
+                  color: Colors.white,
+                  fontSize: isSmallScreen ? 12 : 14,
+                  fontWeight: FontWeight.w500,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 4),
-            Text(
-              value,
-              style: GoogleFonts.poppins(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
+            Flexible(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  value,
+                  style: GoogleFonts.poppins(
+                    color: Colors.white,
+                    fontSize: isSmallScreen ? 16 : 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
             ),
+            if (subtitle != null) ...[
+              const SizedBox(height: 4),
+              Flexible(
+                child: Text(
+                  subtitle,
+                  style: GoogleFonts.poppins(
+                    color: Colors.white.withOpacity(0.8),
+                    fontSize: isSmallScreen ? 9 : 10,
+                    fontWeight: FontWeight.w400,
+                  ),
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -922,8 +1065,22 @@ class _MemberDashboardState extends State<MemberDashboard> {
                 child: _buildActionButton(
                   'Withdraw',
                   Icons.remove_circle,
-                  Colors.orange,
-                  _initiateWithdrawal,
+                  _isBlindUser ? Colors.grey : Colors.orange,
+                  _isBlindUser
+                      ? () {
+                          _speak(
+                            "Withdrawal is not available for blind users for security reasons.",
+                          );
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Withdrawal is not available for blind users for security reasons',
+                              ),
+                              backgroundColor: Colors.orange,
+                            ),
+                          );
+                        }
+                      : _initiateWithdrawal,
                 ),
               ),
             ],
@@ -961,12 +1118,17 @@ class _MemberDashboardState extends State<MemberDashboard> {
     Color color,
     VoidCallback onPressed,
   ) {
+    // Get screen dimensions for responsive design
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isSmallScreen = screenWidth < 400;
+    final isDisabled = color == Colors.grey;
+
     return Container(
-      height: 80,
+      height: isSmallScreen ? 70 : 80,
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withOpacity(isDisabled ? 0.05 : 0.1),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withOpacity(isDisabled ? 0.2 : 0.3)),
       ),
       child: Material(
         color: Colors.transparent,
@@ -974,23 +1136,41 @@ class _MemberDashboardState extends State<MemberDashboard> {
           onTap: onPressed,
           borderRadius: BorderRadius.circular(12),
           child: Padding(
-            padding: const EdgeInsets.all(12),
+            padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(icon, color: color, size: 24),
-                const SizedBox(height: 4),
-                Text(
-                  title,
-                  style: GoogleFonts.poppins(
-                    color: color,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                Icon(
+                  icon,
+                  color: isDisabled ? Colors.grey[400] : color,
+                  size: isSmallScreen ? 20 : 24,
                 ),
+                SizedBox(height: isSmallScreen ? 2 : 4),
+                Flexible(
+                  child: Text(
+                    title,
+                    style: GoogleFonts.poppins(
+                      color: isDisabled ? Colors.grey[400] : color,
+                      fontSize: isSmallScreen ? 10 : 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (isDisabled && title == 'Withdraw') ...[
+                  SizedBox(height: isSmallScreen ? 2 : 4),
+                  Text(
+                    'Not Available',
+                    style: GoogleFonts.poppins(
+                      color: Colors.grey[400],
+                      fontSize: 8,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
               ],
             ),
           ),
@@ -1053,23 +1233,32 @@ class _MemberDashboardState extends State<MemberDashboard> {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Row(
             children: [
               Icon(Icons.payment, color: _primaryColor, size: 20),
               const SizedBox(width: 8),
-              Text(
-                'Loan Repayments Due',
-                style: GoogleFonts.poppins(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: _textSecondary,
+              Expanded(
+                child: Text(
+                  'Loan Repayments Due',
+                  style: GoogleFonts.poppins(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: _textSecondary,
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
           ),
           const SizedBox(height: 16),
-          ...duePayments.map((loan) => _buildLoanDueCard(loan)),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: duePayments
+                .map((loan) => _buildLoanDueCard(loan))
+                .toList(),
+          ),
         ],
       ),
     );
@@ -1098,13 +1287,16 @@ class _MemberDashboardState extends State<MemberDashboard> {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
+          // Header row with overflow protection
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
                       'Loan ${loan.id.substring(0, 8)}',
@@ -1114,6 +1306,7 @@ class _MemberDashboardState extends State<MemberDashboard> {
                         color: _textSecondary,
                       ),
                       overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -1123,10 +1316,13 @@ class _MemberDashboardState extends State<MemberDashboard> {
                         fontWeight: FontWeight.bold,
                         color: isOverdue ? Colors.red : Colors.orange,
                       ),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
                     ),
                   ],
                 ),
               ),
+              const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
@@ -1145,18 +1341,24 @@ class _MemberDashboardState extends State<MemberDashboard> {
             ],
           ),
           const SizedBox(height: 12),
+          // Action row with overflow protection
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                isOverdue
-                    ? 'Overdue by ${daysRemaining.abs()} days'
-                    : 'Due in $daysRemaining days',
-                style: GoogleFonts.poppins(
-                  fontSize: 12,
-                  color: isOverdue ? Colors.red : Colors.orange,
+              Expanded(
+                child: Text(
+                  isOverdue
+                      ? 'Overdue by ${daysRemaining.abs()} days'
+                      : 'Due in $daysRemaining days',
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    color: isOverdue ? Colors.red : Colors.orange,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
                 ),
               ),
+              const SizedBox(width: 8),
               ElevatedButton(
                 onPressed: () => _makePayment(loan),
                 style: ElevatedButton.styleFrom(
@@ -1195,6 +1397,7 @@ class _MemberDashboardState extends State<MemberDashboard> {
           border: Border.all(color: Colors.grey.withOpacity(0.3)),
         ),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Icon(Icons.receipt_long, size: 40, color: Colors.grey),
             const SizedBox(height: 12),
@@ -1205,6 +1408,7 @@ class _MemberDashboardState extends State<MemberDashboard> {
                 fontWeight: FontWeight.w600,
                 color: Colors.grey,
               ),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 4),
             Text(
@@ -1235,23 +1439,30 @@ class _MemberDashboardState extends State<MemberDashboard> {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
+          // Header with overflow protection
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: [
-                  Icon(Icons.receipt_long, color: _primaryColor, size: 20),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Recent Transactions',
-                    style: GoogleFonts.poppins(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: _textSecondary,
+              Expanded(
+                child: Row(
+                  children: [
+                    Icon(Icons.receipt_long, color: _primaryColor, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Recent Transactions',
+                        style: GoogleFonts.poppins(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: _textSecondary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
               TextButton(
                 onPressed: () => setState(() => _currentIndex = 2),
@@ -1266,7 +1477,14 @@ class _MemberDashboardState extends State<MemberDashboard> {
             ],
           ),
           const SizedBox(height: 12),
-          ..._transactions.take(3).map((txn) => _buildTransactionCard(txn)),
+          // Transaction list with overflow protection
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: _transactions
+                .take(3)
+                .map((txn) => _buildTransactionCard(txn))
+                .toList(),
+          ),
         ],
       ),
     );
@@ -1282,7 +1500,10 @@ class _MemberDashboardState extends State<MemberDashboard> {
       ),
       child: Row(
         children: [
+          // Icon container with fixed size
           Container(
+            width: 36,
+            height: 36,
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
               color: _getStatusColor(txn.status).withOpacity(0.2),
@@ -1295,9 +1516,11 @@ class _MemberDashboardState extends State<MemberDashboard> {
             ),
           ),
           const SizedBox(width: 12),
+          // Main content area with overflow protection
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
                   txn.type,
@@ -1307,42 +1530,58 @@ class _MemberDashboardState extends State<MemberDashboard> {
                     color: _textSecondary,
                   ),
                   overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
                 ),
+                const SizedBox(height: 2),
                 Text(
                   '${DateFormat('MMM d').format(txn.date)} • ${txn.method}',
                   style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey),
                   overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
                 ),
               ],
             ),
           ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                _formatCurrency(txn.amount),
-                style: GoogleFonts.poppins(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: _textSecondary,
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: _getStatusColor(txn.status).withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  txn.status,
+          const SizedBox(width: 8),
+          // Amount and status with overflow protection
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _formatCurrency(txn.amount),
                   style: GoogleFonts.poppins(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    color: _getStatusColor(txn.status),
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: _textSecondary,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _getStatusColor(txn.status).withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    txn.status,
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: _getStatusColor(txn.status),
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
@@ -1424,6 +1663,369 @@ class _MemberDashboardState extends State<MemberDashboard> {
         loans: _loans,
         totalDue: _calculateTotalDue(),
         onPayment: _makePayment,
+      ),
+    );
+  }
+
+  void _showPendingLoans() {
+    final pendingLoans = _loans
+        .where((loan) => loan.status == 'Pending')
+        .toList();
+
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.8,
+            maxWidth: MediaQuery.of(context).size.width * 0.9,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.1),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.pending_actions, color: Colors.blue),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        'Pending Loans',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+              ),
+              Flexible(
+                child: pendingLoans.isEmpty
+                    ? const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(32),
+                          child: Text('No pending loans'),
+                        ),
+                      )
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: pendingLoans.length,
+                        itemBuilder: (context, index) {
+                          final loan = pendingLoans[index];
+                          return Card(
+                            margin: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 4,
+                            ),
+                            child: ListTile(
+                              leading: const Icon(
+                                Icons.pending_actions,
+                                color: Colors.blue,
+                              ),
+                              title: Text('Loan ${index + 1}'),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Amount: ${_formatCurrency(loan.amount)}',
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  Text(
+                                    'Type: ${loan.type}',
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  Text(
+                                    'Applied: ${DateFormat.yMMMd().format(loan.disbursementDate)}',
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                              trailing: const Chip(
+                                label: Text('Pending'),
+                                backgroundColor: Colors.blue,
+                                labelStyle: TextStyle(color: Colors.white),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showDepositHistory() {
+    final deposits = _savingsHistory
+        .where((item) => item.type.toLowerCase().contains('deposit'))
+        .toList();
+
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.8,
+            maxWidth: MediaQuery.of(context).size.width * 0.9,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.green.withOpacity(0.1),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.trending_up, color: Colors.green),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        'Deposit History',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+              ),
+              if (deposits.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Total Deposits:'),
+                      Flexible(
+                        child: Text(
+                          _formatCurrency(
+                            deposits.fold(
+                              0.0,
+                              (sum, item) => sum + item.amount,
+                            ),
+                          ),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.green,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              Flexible(
+                child: deposits.isEmpty
+                    ? const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(32),
+                          child: Text('No deposits found'),
+                        ),
+                      )
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: deposits.length,
+                        itemBuilder: (context, index) {
+                          final deposit = deposits[index];
+                          return Card(
+                            margin: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 4,
+                            ),
+                            child: ListTile(
+                              leading: const Icon(
+                                Icons.trending_up,
+                                color: Colors.green,
+                              ),
+                              title: Flexible(
+                                child: Text(
+                                  _formatCurrency(deposit.amount),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              subtitle: Text(
+                                DateFormat.yMMMd().add_jm().format(
+                                  deposit.date,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              trailing: Flexible(
+                                child: Text(
+                                  deposit.type,
+                                  style: const TextStyle(
+                                    color: Colors.green,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showWithdrawalHistory() {
+    final withdrawals = _savingsHistory
+        .where((item) => item.type.toLowerCase().contains('withdraw'))
+        .toList();
+
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.8,
+            maxWidth: MediaQuery.of(context).size.width * 0.9,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.1),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.trending_down, color: Colors.red),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        'Withdrawal History',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+              ),
+              if (withdrawals.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Total Withdrawals:'),
+                      Flexible(
+                        child: Text(
+                          _formatCurrency(
+                            withdrawals.fold(
+                              0.0,
+                              (sum, item) => sum + item.amount,
+                            ),
+                          ),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.red,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              Flexible(
+                child: withdrawals.isEmpty
+                    ? const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(32),
+                          child: Text('No withdrawals found'),
+                        ),
+                      )
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: withdrawals.length,
+                        itemBuilder: (context, index) {
+                          final withdrawal = withdrawals[index];
+                          return Card(
+                            margin: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 4,
+                            ),
+                            child: ListTile(
+                              leading: const Icon(
+                                Icons.trending_down,
+                                color: Colors.red,
+                              ),
+                              title: Flexible(
+                                child: Text(
+                                  _formatCurrency(withdrawal.amount),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              subtitle: Text(
+                                DateFormat.yMMMd().add_jm().format(
+                                  withdrawal.date,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              trailing: Flexible(
+                                child: Text(
+                                  withdrawal.type,
+                                  style: const TextStyle(
+                                    color: Colors.red,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1825,8 +2427,8 @@ class _MemberDashboardState extends State<MemberDashboard> {
             onPressed: () {
               final amount = double.tryParse(amountController.text) ?? 0;
               if (amount > 0) {
-                _voiceConfirmDeposit(amount, selectedMethod);
                 Navigator.pop(context);
+                _showDepositConfirmationDialog(amount, selectedMethod);
               } else {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
@@ -1844,7 +2446,7 @@ class _MemberDashboardState extends State<MemberDashboard> {
               ),
             ),
             child: Text(
-              'Deposit',
+              'Continue',
               style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
             ),
           ),
@@ -1858,59 +2460,225 @@ class _MemberDashboardState extends State<MemberDashboard> {
     await _showEnhancedDepositDialog();
   }
 
+  // Show deposit confirmation dialog for normal users
+  Future<void> _showDepositConfirmationDialog(
+    double amount,
+    String method,
+  ) async {
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _buildEnhancedDialog(
+        title: 'Confirm Deposit',
+        icon: Icons.verified,
+        iconColor: Colors.green[600]!,
+        content: _buildTransactionSummaryCard(
+          amount: amount,
+          method: method,
+          type: 'Deposit',
+          color: Colors.green,
+        ),
+        message:
+            'Please confirm this deposit transaction. This action cannot be undone.',
+        primaryAction: 'Confirm Deposit',
+        secondaryAction: 'Cancel',
+        onPrimaryAction: () {
+          Navigator.pop(context);
+          _processDeposit(amount, method, voiceConfirmed: true);
+        },
+        onSecondaryAction: () => Navigator.pop(context),
+        primaryColor: Colors.green[600]!,
+      ),
+    );
+  }
+
   Future<void> _processDeposit(
     double amount,
     String method, {
     bool voiceConfirmed = false,
   }) async {
-    if (!_awaitingDepositVoiceConfirmation && !voiceConfirmed) {
+    // For blind users, use voice confirmation if not already confirmed
+    if (_isBlindUser && !_awaitingDepositVoiceConfirmation && !voiceConfirmed) {
       _voiceConfirmDeposit(amount, method);
       return;
     }
+
+    // For normal users, proceed directly if voiceConfirmed is true
+    if (!_isBlindUser && !voiceConfirmed) {
+      // This should not happen for normal users, but just in case
+      return;
+    }
+
     setState(() => _awaitingDepositVoiceConfirmation = false);
+
+    // Generate unique transaction ID
+    final transactionId = DateTime.now().millisecondsSinceEpoch.toString();
+
     try {
-      await FirebaseFirestore.instance
+      print('🔄 Processing deposit: $amount via $method');
+      print('📝 Transaction ID: $transactionId');
+      print('👤 User ID: $memberId');
+
+      // Start transaction batch for atomic operations
+      final batch = FirebaseFirestore.instance.batch();
+
+      // Add to savings collection
+      final savingsRef = FirebaseFirestore.instance
           .collection('users')
           .doc(memberId)
           .collection('savings')
-          .add({
-            'amount': amount,
-            'date': DateTime.now(),
-            'type': 'Deposit',
-            'method': method,
-          });
+          .doc(transactionId);
 
-      await FirebaseFirestore.instance
+      batch.set(savingsRef, {
+        'amount': amount,
+        'date': FieldValue.serverTimestamp(),
+        'type': 'Deposit',
+        'method': method,
+        'transactionId': transactionId,
+        'userId': memberId,
+        'status': 'Completed',
+      });
+
+      // Add to transactions collection
+      final transactionRef = FirebaseFirestore.instance
           .collection('users')
           .doc(memberId)
           .collection('transactions')
-          .add({
-            'amount': amount,
-            'date': DateTime.now(),
-            'type': 'Deposit',
-            'status': 'Completed',
-            'method': method,
-          });
+          .doc(transactionId);
 
+      batch.set(transactionRef, {
+        'amount': amount,
+        'date': FieldValue.serverTimestamp(),
+        'type': 'Deposit',
+        'status': 'Completed',
+        'method': method,
+        'transactionId': transactionId,
+        'userId': memberId,
+        'description': 'Deposit via $method',
+      });
+
+      // Commit the batch
+      await batch.commit();
+
+      print('✅ Deposit transaction committed successfully');
+      print('📊 Savings record created: ${savingsRef.id}');
+      print('📊 Transaction record created: ${transactionRef.id}');
+
+      // Update local state
       setState(() {
         _currentSavings += amount;
       });
 
-      _speak("Deposit of ${_formatCurrency(amount)} successful.");
+      // Validate the transaction
+      await _validateTransaction(transactionId, 'Deposit', amount, method);
+
+      // Only speak for blind users
+      if (_isBlindUser) {
+        _speak("Deposit of ${_formatCurrency(amount)} successful.");
+      }
+
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Deposit of ${_formatCurrency(amount)} successful'),
+          backgroundColor: Colors.green,
         ),
       );
 
-      _fetchSavingsData();
+      // Refresh data
+      await _fetchSavingsData();
+      await _fetchTransactionHistory();
     } catch (e) {
-      _speak("There was an error processing your deposit. Please try again.");
+      print('❌ Error processing deposit: $e');
+      // Only speak for blind users
+      if (_isBlindUser) {
+        _speak("There was an error processing your deposit. Please try again.");
+      }
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error processing deposit: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error processing deposit: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  // Validate transaction after processing
+  Future<void> _validateTransaction(
+    String transactionId,
+    String type,
+    double amount,
+    String method,
+  ) async {
+    try {
+      print('🔍 Validating transaction: $transactionId');
+
+      // Check if transaction exists
+      final transactionDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(memberId)
+          .collection('transactions')
+          .doc(transactionId)
+          .get();
+
+      if (!transactionDoc.exists) {
+        print('❌ Transaction validation failed: Transaction not found');
+        return;
+      }
+
+      final transactionData = transactionDoc.data()!;
+
+      // Validate transaction data
+      if (transactionData['amount'] != amount) {
+        print('❌ Transaction validation failed: Amount mismatch');
+        print('Expected: $amount, Actual: ${transactionData['amount']}');
+        return;
+      }
+
+      if (transactionData['type'] != type) {
+        print('❌ Transaction validation failed: Type mismatch');
+        print('Expected: $type, Actual: ${transactionData['type']}');
+        return;
+      }
+
+      if (transactionData['method'] != method) {
+        print('❌ Transaction validation failed: Method mismatch');
+        print('Expected: $method, Actual: ${transactionData['method']}');
+        return;
+      }
+
+      if (transactionData['status'] != 'Completed') {
+        print('❌ Transaction validation failed: Status not completed');
+        print('Actual status: ${transactionData['status']}');
+        return;
+      }
+
+      // For deposits, check if savings record exists
+      if (type == 'Deposit') {
+        final savingsDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(memberId)
+            .collection('savings')
+            .doc(transactionId)
+            .get();
+
+        if (!savingsDoc.exists) {
+          print('❌ Transaction validation failed: Savings record not found');
+          return;
+        }
+
+        final savingsData = savingsDoc.data()!;
+        if (savingsData['amount'] != amount) {
+          print('❌ Transaction validation failed: Savings amount mismatch');
+          print('Expected: $amount, Actual: ${savingsData['amount']}');
+          return;
+        }
+      }
+
+      print('✅ Transaction validation successful: $transactionId');
+    } catch (e) {
+      print('❌ Error validating transaction: $e');
     }
   }
 
@@ -2864,8 +3632,23 @@ class _MemberDashboardState extends State<MemberDashboard> {
     );
   }
 
-  // Add withdrawal functionality
+  // Add withdrawal functionality (disabled for blind users)
   void _initiateWithdrawal() {
+    if (_isBlindUser) {
+      _speak(
+        "Withdrawal functionality is not available for blind users for security reasons.",
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Withdrawal is not available for blind users for security reasons',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     showDialog(
       context: context,
       builder: (context) => _buildWithdrawalDialog(),
@@ -2984,26 +3767,39 @@ class _MemberDashboardState extends State<MemberDashboard> {
     String phone,
     String method,
   ) async {
+    String? transactionId;
+    String? referenceId;
+
     try {
-      // Show loading dialog
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => const AlertDialog(
-          content: Row(
-            children: [
-              CircularProgressIndicator(),
-              SizedBox(width: 16),
-              Text('Processing withdrawal...'),
-            ],
-          ),
-        ),
-      );
+      // Validate withdrawal amount
+      if (amount <= 0) {
+        _showErrorDialog(
+          'Invalid Amount',
+          'Withdrawal amount must be greater than zero.',
+        );
+        return;
+      }
+
+      // Check if user has sufficient balance
+      if (amount > _currentSavings) {
+        _showErrorDialog(
+          'Insufficient Balance',
+          'You do not have sufficient balance for this withdrawal. Current balance: ${_formatCurrency(_currentSavings)}',
+        );
+        return;
+      }
+
+      // Generate transaction ID and reference
+      transactionId = DateTime.now().millisecondsSinceEpoch.toString();
+      referenceId = 'WITHDRAWAL_$transactionId';
+
+      // Show enhanced loading dialog
+      _showWithdrawalProgressDialog(amount, phone, method);
 
       // Process withdrawal based on method
       Map<String, dynamic> result;
       if (method == 'MTN MoMo') {
-        result = await _processMTNWithdrawal(amount, phone);
+        result = await _processMTNWithdrawal(amount, phone, referenceId);
       } else {
         result = {
           'success': false,
@@ -3011,42 +3807,57 @@ class _MemberDashboardState extends State<MemberDashboard> {
         };
       }
 
-      Navigator.pop(context); // Close loading dialog
+      // Close loading dialog
+      Navigator.pop(context);
 
       if (result['success']) {
-        // Add transaction record
-        await _addWithdrawalTransaction(amount, method, result['reference']);
-
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Withdrawal successful! Reference: ${result['reference']}',
-            ),
-            backgroundColor: Colors.green,
-          ),
+        // Add transaction record with enhanced data
+        await _addWithdrawalTransaction(
+          amount,
+          method,
+          result['reference'] ?? referenceId,
+          phone,
+          result['status'] ?? 'PENDING',
+          result['statusDetails'],
         );
 
-        // Refresh data
-        _fetchTransactions();
-        _fetchSavingsData();
+        // Show success feedback
+        _showWithdrawalSuccessDialog(
+          amount,
+          method,
+          result['reference'] ?? referenceId,
+          phone,
+          result['status'] ?? 'PENDING',
+        );
+
+        // Refresh data and verify balance
+        await _refreshAllData();
+        await _verifyBalanceCalculation();
       } else {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Withdrawal failed: ${result['message']}'),
-            backgroundColor: Colors.red,
-          ),
+        // Show detailed error feedback
+        _showWithdrawalErrorDialog(
+          result['message'] ?? 'Withdrawal failed',
+          result['error'] ?? {},
+          amount,
+          method,
         );
       }
     } catch (e) {
-      Navigator.pop(context); // Close loading dialog
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error processing withdrawal: $e'),
-          backgroundColor: Colors.red,
-        ),
+      // Close loading dialog if still open
+      if (Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+
+      // Log error for debugging
+      print('❌ Withdrawal processing error: $e');
+      debugPrint('Withdrawal processing error: $e');
+
+      // Show error feedback
+      _showWithdrawalErrorDialog(
+        'Network or system error occurred',
+        {'error': e.toString()},
+        amount,
+        method,
       );
     }
   }
@@ -3054,6 +3865,7 @@ class _MemberDashboardState extends State<MemberDashboard> {
   Future<Map<String, dynamic>> _processMTNWithdrawal(
     double amount,
     String phone,
+    String externalId,
   ) async {
     try {
       // Create MoMo service instance
@@ -3067,7 +3879,7 @@ class _MemberDashboardState extends State<MemberDashboard> {
       final result = await momoService.transferMoney(
         phoneNumber: fullPhone,
         amount: amount,
-        externalId: 'WITHDRAWAL_${DateTime.now().millisecondsSinceEpoch}',
+        externalId: externalId,
         payeeMessage: 'SACCO Withdrawal',
       );
 
@@ -3077,26 +3889,650 @@ class _MemberDashboardState extends State<MemberDashboard> {
     }
   }
 
+  // Show error dialog
+  void _showErrorDialog(String title, String message) {
+    showDialog(
+      context: context,
+      builder: (context) => _buildEnhancedDialog(
+        title: title,
+        icon: Icons.error_outline,
+        iconColor: Colors.red,
+        content: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.red[50],
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.red[200]!),
+          ),
+          child: Icon(
+            Icons.warning_amber_rounded,
+            size: 48,
+            color: Colors.red[600],
+          ),
+        ),
+        message: message,
+        primaryAction: 'OK',
+        secondaryAction: '',
+        onPrimaryAction: () => Navigator.pop(context),
+        onSecondaryAction: () => Navigator.pop(context),
+        primaryColor: Colors.red,
+      ),
+    );
+  }
+
+  // Show withdrawal progress dialog
+  void _showWithdrawalProgressDialog(
+    double amount,
+    String phone,
+    String method,
+  ) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.9,
+            maxHeight: MediaQuery.of(context).size.height * 0.6,
+          ),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.blue[50],
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  children: [
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Processing Withdrawal',
+                      style: GoogleFonts.poppins(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue[700],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              // Transaction details
+              _buildTransactionSummaryCard(
+                amount: amount,
+                method: method,
+                type: 'Withdrawal',
+                color: Colors.blue,
+                phone: phone,
+              ),
+              const SizedBox(height: 16),
+              // Status message
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey[200]!),
+                ),
+                child: Text(
+                  'Please wait while we process your withdrawal...',
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    color: Colors.grey[600],
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Show withdrawal success dialog
+  void _showWithdrawalSuccessDialog(
+    double amount,
+    String method,
+    String reference,
+    String phone,
+    String status,
+  ) {
+    showDialog(
+      context: context,
+      builder: (context) => _buildEnhancedDialog(
+        title: 'Withdrawal Initiated',
+        icon: Icons.check_circle,
+        iconColor: Colors.green,
+        content: _buildTransactionSummaryCard(
+          amount: amount,
+          method: method,
+          type: 'Withdrawal',
+          color: Colors.green,
+          phone: phone,
+          status: status,
+          reference: reference,
+        ),
+        message:
+            'Your withdrawal has been initiated successfully. You will receive a confirmation SMS shortly.',
+        primaryAction: 'OK',
+        secondaryAction: 'View Transactions',
+        onPrimaryAction: () => Navigator.pop(context),
+        onSecondaryAction: () {
+          Navigator.pop(context);
+          _showTransactionHistory();
+        },
+        primaryColor: Colors.green,
+      ),
+    );
+  }
+
+  // Show withdrawal error dialog
+  void _showWithdrawalErrorDialog(
+    String message,
+    Map<String, dynamic> error,
+    double amount,
+    String method,
+  ) {
+    showDialog(
+      context: context,
+      builder: (context) => _buildEnhancedDialog(
+        title: 'Withdrawal Failed',
+        icon: Icons.error,
+        iconColor: Colors.red,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildTransactionSummaryCard(
+              amount: amount,
+              method: method,
+              type: 'Withdrawal',
+              color: Colors.red,
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.red[50],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.red[200]!),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Error: $message',
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.red[700],
+                    ),
+                  ),
+                  if (error.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Details: ${error.toString()}',
+                      style: GoogleFonts.poppins(
+                        fontSize: 10,
+                        color: Colors.red[600],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+        message: 'Please try again or contact support if the problem persists.',
+        primaryAction: 'Retry',
+        secondaryAction: 'OK',
+        onPrimaryAction: () {
+          Navigator.pop(context);
+          _retryWithdrawal(amount, method);
+        },
+        onSecondaryAction: () => Navigator.pop(context),
+        primaryColor: Colors.red,
+      ),
+    );
+  }
+
+  // Refresh all data
+  Future<void> _refreshAllData() async {
+    await Future.wait([
+      _fetchTransactions(),
+      _fetchSavingsData(),
+      _fetchLoansData(),
+    ]);
+  }
+
+  // Show transaction history
+  void _showTransactionHistory() {
+    // Navigate to transaction history or show in a dialog
+    _currentIndex = 2; // Assuming 2 is the transactions tab
+    setState(() {});
+  }
+
+  // Retry withdrawal
+  void _retryWithdrawal(double amount, String method) {
+    // Show withdrawal dialog again
+    _initiateWithdrawal();
+  }
+
+  // Build enhanced dialog with overflow protection
+  Widget _buildEnhancedDialog({
+    required String title,
+    required IconData icon,
+    required Color iconColor,
+    required Widget content,
+    required String message,
+    required String primaryAction,
+    required String secondaryAction,
+    required VoidCallback onPrimaryAction,
+    required VoidCallback onSecondaryAction,
+    required Color primaryColor,
+  }) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Container(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.9,
+          maxHeight: MediaQuery.of(context).size.height * 0.8,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Header
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: primaryColor.withOpacity(0.1),
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(20),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(icon, color: iconColor, size: 28),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: GoogleFonts.poppins(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey[800],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Content
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    content,
+                    const SizedBox(height: 16),
+                    Text(
+                      message,
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        color: Colors.grey[600],
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // Actions
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.grey[50],
+                borderRadius: const BorderRadius.vertical(
+                  bottom: Radius.circular(20),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: onSecondaryAction,
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      child: Text(
+                        secondaryAction,
+                        style: GoogleFonts.poppins(
+                          color: Colors.grey[600],
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: onPrimaryAction,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: primaryColor,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      child: Text(
+                        primaryAction,
+                        style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Build transaction summary card
+  Widget _buildTransactionSummaryCard({
+    required double amount,
+    required String method,
+    required String type,
+    required Color color,
+    String? phone,
+    String? status,
+    String? reference,
+  }) {
+    // Helper function to get color variants
+    Color getColorVariant(int shade) {
+      if (color == Colors.green) {
+        switch (shade) {
+          case 50:
+            return Colors.green[50]!;
+          case 100:
+            return Colors.green[100]!;
+          case 200:
+            return Colors.green[200]!;
+          case 500:
+            return Colors.green[500]!;
+          case 600:
+            return Colors.green[600]!;
+          case 700:
+            return Colors.green[700]!;
+          default:
+            return Colors.green;
+        }
+      } else if (color == Colors.red) {
+        switch (shade) {
+          case 50:
+            return Colors.red[50]!;
+          case 100:
+            return Colors.red[100]!;
+          case 200:
+            return Colors.red[200]!;
+          case 500:
+            return Colors.red[500]!;
+          case 600:
+            return Colors.red[600]!;
+          case 700:
+            return Colors.red[700]!;
+          default:
+            return Colors.red;
+        }
+      } else if (color == Colors.blue) {
+        switch (shade) {
+          case 50:
+            return Colors.blue[50]!;
+          case 100:
+            return Colors.blue[100]!;
+          case 200:
+            return Colors.blue[200]!;
+          case 500:
+            return Colors.blue[500]!;
+          case 600:
+            return Colors.blue[600]!;
+          case 700:
+            return Colors.blue[700]!;
+          default:
+            return Colors.blue;
+        }
+      }
+      return color;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: getColorVariant(50),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: getColorVariant(200)),
+        boxShadow: [
+          BoxShadow(
+            color: color.withOpacity(0.1),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            type == 'Deposit'
+                ? Icons.account_balance_wallet
+                : Icons.account_balance,
+            size: 40,
+            color: getColorVariant(600),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _formatCurrency(amount),
+            style: GoogleFonts.poppins(
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+              color: getColorVariant(700),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'via $method',
+            style: GoogleFonts.poppins(
+              fontSize: 14,
+              color: getColorVariant(600),
+            ),
+          ),
+          if (phone != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Phone: $phone',
+              style: GoogleFonts.poppins(
+                fontSize: 12,
+                color: getColorVariant(600),
+              ),
+            ),
+          ],
+          if (status != null) ...[
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: getColorVariant(100),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                status,
+                style: GoogleFonts.poppins(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: getColorVariant(700),
+                ),
+              ),
+            ),
+          ],
+          if (reference != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Ref: $reference',
+              style: GoogleFonts.poppins(
+                fontSize: 10,
+                color: getColorVariant(500),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // Verify balance calculation
+  Future<void> _verifyBalanceCalculation() async {
+    try {
+      print('🔍 Verifying balance calculation...');
+
+      final savingsSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(memberId)
+          .collection('savings')
+          .orderBy('date', descending: true)
+          .get();
+
+      double calculatedBalance = 0;
+      int depositCount = 0;
+      int withdrawalCount = 0;
+      double totalDeposits = 0;
+      double totalWithdrawals = 0;
+
+      for (var doc in savingsSnapshot.docs) {
+        final amount = doc['amount']?.toDouble() ?? 0;
+        final type = doc['type'] ?? 'Unknown';
+
+        calculatedBalance += amount;
+
+        if (amount > 0) {
+          depositCount++;
+          totalDeposits += amount;
+        } else if (amount < 0) {
+          withdrawalCount++;
+          totalWithdrawals += amount.abs();
+        }
+      }
+
+      print('📊 Balance Verification Results:');
+      print('   - Calculated balance: ${_formatCurrency(calculatedBalance)}');
+      print('   - Current balance: ${_formatCurrency(_currentSavings)}');
+      print(
+        '   - Difference: ${_formatCurrency(calculatedBalance - _currentSavings)}',
+      );
+      print(
+        '   - Total deposits: ${_formatCurrency(totalDeposits)} ($depositCount transactions)',
+      );
+      print(
+        '   - Total withdrawals: ${_formatCurrency(totalWithdrawals)} ($withdrawalCount transactions)',
+      );
+
+      if ((calculatedBalance - _currentSavings).abs() > 0.01) {
+        print('⚠️  Balance mismatch detected!');
+        // Force refresh the balance
+        _currentSavings = calculatedBalance;
+        setState(() {});
+        print('✅ Balance corrected to: ${_formatCurrency(_currentSavings)}');
+      } else {
+        print('✅ Balance calculation is correct');
+      }
+    } catch (e) {
+      print('❌ Error verifying balance: $e');
+    }
+  }
+
   Future<void> _addWithdrawalTransaction(
     double amount,
     String method,
     String reference,
+    String phone,
+    String status,
+    Map<String, dynamic>? statusDetails,
   ) async {
     try {
-      await FirebaseFirestore.instance
+      print('🔄 Adding withdrawal transaction to database');
+      print('📝 Amount: $amount, Method: $method, Reference: $reference');
+
+      // Generate unique transaction ID
+      final transactionId = DateTime.now().millisecondsSinceEpoch.toString();
+
+      // Start transaction batch for atomic operations
+      final batch = FirebaseFirestore.instance.batch();
+
+      // Add to transactions collection
+      final transactionRef = FirebaseFirestore.instance
           .collection('users')
           .doc(memberId)
           .collection('transactions')
-          .add({
-            'amount': amount,
-            'type': 'Withdrawal',
-            'method': method,
-            'status': 'Completed',
-            'date': FieldValue.serverTimestamp(),
-            'reference': reference,
-            'phoneNumber': '', // Will be filled from withdrawal data
-          });
+          .doc(transactionId);
+
+      batch.set(transactionRef, {
+        'amount': amount,
+        'type': 'Withdrawal',
+        'method': method,
+        'status': status,
+        'date': FieldValue.serverTimestamp(),
+        'reference': reference,
+        'transactionId': transactionId,
+        'userId': memberId,
+        'description': 'Withdrawal via $method',
+        'phoneNumber': phone,
+        'statusDetails': statusDetails,
+      });
+
+      // Add to savings collection as negative amount
+      final savingsRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(memberId)
+          .collection('savings')
+          .doc(transactionId);
+
+      batch.set(savingsRef, {
+        'amount': -amount, // Negative amount for withdrawal
+        'date': FieldValue.serverTimestamp(),
+        'type': 'Withdrawal',
+        'method': method,
+        'transactionId': transactionId,
+        'userId': memberId,
+        'status': status,
+        'reference': reference,
+        'phoneNumber': phone,
+      });
+
+      // Commit the batch
+      await batch.commit();
+
+      print('✅ Withdrawal transaction committed successfully');
+      print('📊 Transaction record created: ${transactionRef.id}');
+      print('📊 Savings record created: ${savingsRef.id}');
+
+      // Immediately update the current balance
+      _currentSavings -= amount;
+      print(
+        '💰 Balance updated: ${_formatCurrency(_currentSavings)} (deducted ${_formatCurrency(amount)})',
+      );
+
+      // Validate the transaction
+      await _validateTransaction(transactionId, 'Withdrawal', amount, method);
     } catch (e) {
+      print('❌ Error adding withdrawal transaction: $e');
       debugPrint('Error adding withdrawal transaction: $e');
     }
   }
@@ -3722,5 +5158,6 @@ class Transaction {
     required this.method,
     this.loanId,
     this.paymentId,
+    required description,
   });
 }

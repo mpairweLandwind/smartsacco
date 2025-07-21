@@ -1,9 +1,7 @@
-// ignore_for_file: library_private_types_in_public_api, deprecated_member_use, avoid_print
+// ignore_for_file: library_private_types_in_public_api, deprecated_member_use
 
 import 'package:flutter/material.dart';
-import 'package:flutter_tts/flutter_tts.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
-import 'package:permission_handler/permission_handler.dart';
+import 'package:smartsacco/services/enhanced_voice_service.dart';
 import 'package:logging/logging.dart';
 
 class VoiceWelcomeScreen extends StatefulWidget {
@@ -15,19 +13,10 @@ class VoiceWelcomeScreen extends StatefulWidget {
 
 class _VoiceWelcomeScreenState extends State<VoiceWelcomeScreen>
     with TickerProviderStateMixin {
+  final EnhancedVoiceService _voiceService = EnhancedVoiceService();
   final Logger _logger = Logger('VoiceWelcomeScreen');
-  FlutterTts flutterTts = FlutterTts();
-  stt.SpeechToText speech = stt.SpeechToText();
-  bool isListening = false;
-  bool isSpeaking = false;
-  String spokenText = "";
-  int retryCount = 0;
-  final int maxRetries = 3;
 
-  // Confirmation state
-  bool awaitingConfirmation = false;
-  String pendingAction = "";
-
+  // Animation controllers
   late AnimationController _fadeController;
   late AnimationController _scaleController;
   late AnimationController _pulseController;
@@ -35,12 +24,22 @@ class _VoiceWelcomeScreenState extends State<VoiceWelcomeScreen>
   late Animation<double> _scaleAnimation;
   late Animation<double> _pulseAnimation;
 
+  // Voice state
+  bool isListening = false;
+  bool isSpeaking = false;
+  String spokenText = "";
+  int retryCount = 0;
+  final int maxRetries = 3;
+  
+  // Confirmation state
+  bool awaitingConfirmation = false;
+  String pendingAction = "";
+
   @override
   void initState() {
     super.initState();
     _initAnimations();
-    _initTTS();
-    _requestPermissions();
+    _initializeVoiceService();
     _startWelcomeSequence();
   }
 
@@ -72,28 +71,58 @@ class _VoiceWelcomeScreenState extends State<VoiceWelcomeScreen>
     );
   }
 
-  Future<void> _initTTS() async {
-    await flutterTts.setLanguage("en-US");
-    await flutterTts.setSpeechRate(0.5);
-    await flutterTts.setVolume(1.0);
-    await flutterTts.setPitch(1.0);
-
-    flutterTts.setCompletionHandler(() {
-      if (mounted) {
-        setState(() {
-          isSpeaking = false;
-        });
-        if (!isListening) {
-          _startListening();
-        }
-      }
-    });
+  Future<void> _initializeVoiceService() async {
+    try {
+      await _voiceService.initialize(
+        onSpeechResult: _handleSpeechResult,
+        onSpeechError: _handleSpeechError,
+        onListeningStateChanged: _handleListeningStateChanged,
+        onSpeakingStateChanged: _handleSpeakingStateChanged,
+      );
+      _logger.info('Enhanced voice service initialized successfully');
+    } catch (e) {
+      _logger.severe('Failed to initialize voice service: $e');
+      _showError(
+        "Voice service initialization failed. Please tap to continue.",
+      );
+    }
   }
 
-  Future<void> _requestPermissions() async {
-    var status = await Permission.microphone.request();
-    if (status != PermissionStatus.granted) {
-      _showError("Microphone permission is required for voice commands");
+  void _handleSpeechResult(String text) {
+      if (mounted) {
+        setState(() {
+        spokenText = text.toLowerCase();
+      });
+
+      _logger.info('Recognized: $spokenText');
+      _handleVoiceNavigation();
+    }
+  }
+
+  void _handleSpeechError(String error) {
+    _logger.warning('Speech error: $error');
+    _handleSpeechErrorInternal(error);
+  }
+
+  void _handleListeningStateChanged(bool listening) {
+    if (mounted) {
+      setState(() {
+        isListening = listening;
+      });
+
+      if (listening) {
+        _pulseController.repeat(reverse: true);
+      } else {
+        _pulseController.stop();
+      }
+    }
+  }
+
+  void _handleSpeakingStateChanged(bool speaking) {
+    if (mounted) {
+      setState(() {
+        isSpeaking = speaking;
+      });
     }
   }
 
@@ -110,95 +139,86 @@ class _VoiceWelcomeScreenState extends State<VoiceWelcomeScreen>
     const String welcomeMessage =
         "Welcome Back again. To register say one and to login say three";
 
-    setState(() {
-      isSpeaking = true;
-    });
+    await _voiceService.speak(welcomeMessage);
 
-    await flutterTts.speak(welcomeMessage);
+    // Start listening after speaking
+    await Future.delayed(Duration(seconds: 1));
+    await _startListening();
   }
 
   Future<void> _startListening() async {
-    _logger.info("Starting speech recognition...");
+    try {
+      List<String> triggerWords = [
+        'one',
+        '1',
+        'won',
+        'wan',
+        'wun',
+        'first',
+        'register',
+        'three',
+        '3',
+        'tree',
+        'free',
+        'third',
+        'login',
+        'yes',
+        'yeah',
+        'yep',
+        'yup',
+        'sure',
+        'okay',
+        'ok',
+        'no',
+        'nope',
+        'nah',
+        'negative',
+      ];
 
-    if (isListening) {
-      await speech.stop();
-    }
-
-    bool available = await speech.initialize(
-      onStatus: (val) {
-        _logger.info("Speech status: $val");
-        if (mounted) {
-          setState(() {
-            isListening = val == 'listening';
-          });
-
-          if (val == 'done' || val == 'notListening') {
-            _handleListeningComplete();
-          }
-        }
-      },
-      onError: (val) {
-        _logger.warning("Speech error: $val");
-        if (mounted) {
-          setState(() {
-            isListening = false;
-          });
-          _handleSpeechError(val.errorMsg);
-        }
-      },
-    );
-
-    _logger.info("Speech available: $available");
-    if (available) {
-      if (mounted) {
-        setState(() {
-          isListening = true;
-          spokenText = "";
-        });
-
-        _pulseController.repeat(reverse: true);
-      }
-
-      await speech.listen(
-        onResult: (val) {
-          print("Recognized words: ${val.recognizedWords}");
-          if (mounted) {
-            setState(() {
-              spokenText = val.recognizedWords.toLowerCase();
-            });
-            _handleVoiceNavigation();
-          }
-        },
-        listenFor: const Duration(seconds: 15),
-        pauseFor: const Duration(seconds: 5),
-        partialResults: true,
-        cancelOnError: false,
-        listenMode: stt.ListenMode.confirmation,
+      await _voiceService.startListening(
+        triggerWords: triggerWords,
+        listenFor: Duration(seconds: 15),
+        pauseFor: Duration(seconds: 5),
       );
-    } else {
+    } catch (e) {
+      _logger.severe('Failed to start listening: $e');
       _showError("Speech recognition not available. Please tap to continue.");
     }
   }
 
   void _handleListeningComplete() {
     _pulseController.stop();
-
+    
     if (!awaitingConfirmation) {
       // If we're not awaiting confirmation and haven't heard a valid command
-      if (!spokenText.contains('one') &&
-          !spokenText.contains('1') &&
-          !spokenText.contains('three') &&
-          !spokenText.contains('3') &&
-          !spokenText.contains('yes') &&
-          !spokenText.contains('no') &&
-          retryCount < maxRetries) {
-        retryCount++;
-        String retryMessage = retryCount == 1
-            ? "I didn't catch that. Please say 'one' to register or 'three' to login."
-            : retryCount == 3
-            ? "Let's try again. Say 'one' for register or 'three' for login."
-            : "One more time. Say 'one' to register or 'three' to login.";
+      List<String> validCommands = [
+        'one',
+        '1',
+        'won',
+        'wan',
+        'wun',
+        'first',
+        'register',
+        'three',
+        '3',
+        'tree',
+        'free',
+        'third',
+        'login',
+      ];
 
+      bool hasValidCommand = validCommands.any(
+        (word) => spokenText.contains(word),
+      );
+
+      if (!hasValidCommand && retryCount < maxRetries) {
+        retryCount++;
+        String retryMessage = retryCount == 1 
+            ? "I didn't catch that. Please say 'one' to register or 'three' to login."
+            : retryCount == 3 
+                ? "Let's try again. Say 'one' for register or 'three' for login."
+                : "One more time. Say 'one' to register or 'three' to login.";
+        
         _speakAndRetry(retryMessage);
       } else if (retryCount >= maxRetries) {
         _speakAndRetry(
@@ -207,25 +227,41 @@ class _VoiceWelcomeScreenState extends State<VoiceWelcomeScreen>
       }
     } else {
       // If we're awaiting confirmation but didn't hear yes/no
-      if (!spokenText.contains('yes') &&
-          !spokenText.contains('no') &&
-          retryCount < maxRetries) {
+      List<String> confirmationWords = [
+        'yes',
+        'yeah',
+        'yep',
+        'yup',
+        'sure',
+        'okay',
+        'ok',
+        'no',
+        'nope',
+        'nah',
+        'negative',
+      ];
+
+      bool hasConfirmation = confirmationWords.any(
+        (word) => spokenText.contains(word),
+      );
+
+      if (!hasConfirmation && retryCount < maxRetries) {
         retryCount++;
         _speakAndRetry("Please say 'yes' to confirm or 'no' to cancel.");
       } else if (retryCount >= maxRetries) {
         _resetConfirmationState();
         _speakAndRetry(
-          "Let's start over. Say 'one' to register or 'two' to login.",
+          "Let's start over. Say 'one' to register or 'three' to login.",
         );
       }
     }
   }
 
-  void _handleSpeechError(String errorMsg) {
+  void _handleSpeechErrorInternal(String errorMsg) {
     _pulseController.stop();
-
+    
     print('Speech error details: $errorMsg');
-
+    
     if (errorMsg.contains('network') || errorMsg.contains('connection')) {
       _speakAndRetry(
         "Network issue detected. Please check your connection and try again.",
@@ -238,7 +274,7 @@ class _VoiceWelcomeScreenState extends State<VoiceWelcomeScreen>
         );
       } else {
         _speakAndRetry(
-          "I didn't hear anything. Please say 'one' to register or 'two' to login.",
+          "I didn't hear anything. Please say 'one' to register or 'three' to login.",
         );
       }
     } else if (retryCount < maxRetries) {
@@ -249,7 +285,7 @@ class _VoiceWelcomeScreenState extends State<VoiceWelcomeScreen>
         );
       } else {
         _speakAndRetry(
-          "Let's try again. Say 'one' to register or 'two' to login.",
+          "Let's try again. Say 'one' to register or 'three' to login.",
         );
       }
     } else {
@@ -263,16 +299,16 @@ class _VoiceWelcomeScreenState extends State<VoiceWelcomeScreen>
   }
 
   Future<void> _speakAndRetry(String message) async {
-    setState(() {
-      isSpeaking = true;
-    });
-
-    await flutterTts.speak(message);
+    await _voiceService.speak(message);
+    
+    // Start listening again after speaking
+    await Future.delayed(Duration(seconds: 2));
+    await _startListening();
   }
 
   void _handleVoiceNavigation() {
     print("Handling voice navigation with text: $spokenText");
-
+    
     if (awaitingConfirmation) {
       _handleConfirmation();
     } else {
@@ -281,16 +317,27 @@ class _VoiceWelcomeScreenState extends State<VoiceWelcomeScreen>
   }
 
   void _handleInitialCommand() {
-    if (spokenText.contains('one') || spokenText.contains('1')) {
-      print("Detected 'one' - requesting confirmation for register");
+    List<String> registerWords = [
+      'one',
+      '1',
+      'won',
+      'wan',
+      'wun',
+      'first',
+      'register',
+    ];
+    List<String> loginWords = ['three', '3', 'tree', 'free', 'third', 'login'];
+
+    if (registerWords.any((word) => spokenText.contains(word))) {
+      print("Detected register command - requesting confirmation");
       _requestConfirmation("register", "one");
-    } else if (spokenText.contains('three') || spokenText.contains('3')) {
-      print("Detected 'three' - requesting confirmation for login");
+    } else if (loginWords.any((word) => spokenText.contains(word))) {
+      print("Detected login command - requesting confirmation");
       _requestConfirmation("login", "three");
     } else {
       print("Unrecognized command: $spokenText");
       _speakAndRetry(
-        "I didn't catch that Please say 'one' to register or 'three' to login.",
+        "I didn't catch that. Please say 'one' to register or 'three' to login.",
       );
     }
   }
@@ -308,7 +355,7 @@ class _VoiceWelcomeScreenState extends State<VoiceWelcomeScreen>
     });
 
     _pulseController.stop();
-    await speech.stop();
+    await _voiceService.stopListening();
 
     String confirmationMessage =
         "Did you say $number to $action? Say yes to confirm or no to cancel.";
@@ -317,32 +364,65 @@ class _VoiceWelcomeScreenState extends State<VoiceWelcomeScreen>
       isSpeaking = true;
     });
 
-    // Ensure TTS is reset before speaking
-    await flutterTts.stop();
-    await flutterTts.speak(confirmationMessage);
+    await _voiceService.speak(confirmationMessage);
+
+    // Start listening for confirmation
+    await Future.delayed(Duration(seconds: 1));
+    await _startListening();
   }
 
   void _handleConfirmation() {
-    if (spokenText.contains('yes')) {
-      _executeAction(pendingAction);
-    } else if (spokenText.contains('no')) {
-      _resetConfirmationState();
-      _speakAndRetry(
-        "Okay, let's start over. Say 'one' to register or 'three' to login.",
-      );
+    List<String> yesWords = ['yes', 'yeah', 'yep', 'yup', 'sure', 'okay', 'ok'];
+    List<String> noWords = ['no', 'nope', 'nah', 'negative'];
+
+    if (yesWords.any((word) => spokenText.contains(word))) {
+      _confirmAction();
+    } else if (noWords.any((word) => spokenText.contains(word))) {
+      _cancelAction();
     } else {
+      print("Unrecognized confirmation: $spokenText");
       _speakAndRetry("Please say 'yes' to confirm or 'no' to cancel.");
     }
   }
 
-  void _executeAction(String action) {
-    _resetConfirmationState();
-
-    if (action == "register") {
-      Navigator.pushNamed(context, '/voiceRegister');
-    } else if (action == "login") {
-      Navigator.pushNamed(context, '/voiceLogin');
+  void _confirmAction() async {
+    setState(() {
+      isListening = false;
+      awaitingConfirmation = false;
+    });
+    
+    _pulseController.stop();
+    await _voiceService.stopListening();
+    
+    if (pendingAction == "register") {
+      await _voiceService.speak("Navigating to registration.");
+      await Future.delayed(Duration(seconds: 2));
+        if (mounted) {
+          Navigator.pushReplacementNamed(context, '/voiceRegister');
+        }
+    } else if (pendingAction == "login") {
+      await _voiceService.speak("Navigating to login.");
+      await Future.delayed(Duration(seconds: 2));
+        if (mounted) {
+          Navigator.pushReplacementNamed(context, '/voiceLogin');
+        }
     }
+  }
+
+  void _cancelAction() async {
+    setState(() {
+      isListening = false;
+      awaitingConfirmation = false;
+    });
+
+    _pulseController.stop();
+    await _voiceService.stopListening();
+
+    await _speakWelcomeAfterCancel();
+
+    // Start listening again
+    await Future.delayed(Duration(seconds: 2));
+    await _startListening();
   }
 
   void _resetConfirmationState() {
@@ -354,8 +434,19 @@ class _VoiceWelcomeScreenState extends State<VoiceWelcomeScreen>
     });
   }
 
+  Future<void> _speakWelcomeAfterCancel() async {
+    await _voiceService.speak(
+      "Navigating you back to home screen. Welcome Back again. To register say one and to login say three",
+    );
+  }
+
   void _showError(String message) {
-    flutterTts.speak(message);
+    _voiceService.speak(message);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
+      );
+    }
   }
 
   @override
@@ -363,166 +454,249 @@ class _VoiceWelcomeScreenState extends State<VoiceWelcomeScreen>
     _fadeController.dispose();
     _scaleController.dispose();
     _pulseController.dispose();
+    _voiceService.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.blue[50],
+      backgroundColor: Colors.blue.shade50,
       body: GestureDetector(
         onTap: () {
-          // Allow manual navigation for users who prefer touch
-          Navigator.pushNamed(context, '/home');
+          if (!awaitingConfirmation) {
+            Navigator.pushReplacementNamed(context, '/home');
+          }
         },
-        child: Center(
+        child: Container(
+          width: double.infinity,
+          height: double.infinity,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Colors.blue.shade100, Colors.blue.shade50],
+            ),
+          ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Animated logo
+              // Logo/Icon
               AnimatedBuilder(
                 animation: _scaleAnimation,
                 builder: (context, child) {
                   return Transform.scale(
                     scale: _scaleAnimation.value,
-                    child: Container(
-                      width: 120,
-                      height: 120,
-                      decoration: BoxDecoration(
-                        color: Colors.blue,
-                        borderRadius: BorderRadius.circular(60),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.blue.withOpacity(0.3),
-                            blurRadius: 20,
-                            spreadRadius: 5,
-                          ),
-                        ],
-                      ),
-                      child: const Icon(
-                        Icons.mic,
-                        size: 60,
-                        color: Colors.white,
-                      ),
-                    ),
-                  );
-                },
-              ),
-
-              const SizedBox(height: 40),
-
-              // Welcome text with fade animation
-              AnimatedBuilder(
-                animation: _fadeAnimation,
-                builder: (context, child) {
-                  return Opacity(
-                    opacity: _fadeAnimation.value,
-                    child: const Text(
-                      'SmartSacco',
-                      style: TextStyle(
-                        fontSize: 32,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.blue,
+                    child: FadeTransition(
+                      opacity: _fadeAnimation,
+                      child: Container(
+                        width: 120,
+                        height: 120,
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade600,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.blue.shade300.withOpacity(0.5),
+                              spreadRadius: 5,
+                              blurRadius: 15,
+                              offset: Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: Icon(
+                          Icons.voice_chat,
+                          size: 60,
+                          color: Colors.white,
+                        ),
                       ),
                     ),
                   );
                 },
               ),
 
-              const SizedBox(height: 20),
+              SizedBox(height: 30),
 
-              // Voice status indicator
-              AnimatedBuilder(
-                animation: _pulseAnimation,
-                builder: (context, child) {
-                  return Transform.scale(
-                    scale: isListening ? _pulseAnimation.value : 1.0,
-                    child: Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: isListening ? Colors.green : Colors.grey,
-                        borderRadius: BorderRadius.circular(30),
-                      ),
-                      child: Icon(
-                        isListening ? Icons.mic : Icons.mic_off,
-                        color: Colors.white,
-                        size: 30,
-                      ),
-                    ),
-                  );
-                },
-              ),
-
-              const SizedBox(height: 30),
-
-              // Status text
-              Text(
-                isListening
-                    ? 'Listening...'
-                    : isSpeaking
-                    ? 'Speaking...'
-                    : 'Tap to continue or use voice commands',
-                style: const TextStyle(fontSize: 16, color: Colors.grey),
-              ),
-
-              if (spokenText.isNotEmpty) ...[
-                const SizedBox(height: 20),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(10),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.grey.withOpacity(0.2),
-                        blurRadius: 10,
-                        spreadRadius: 2,
-                      ),
-                    ],
-                  ),
-                  child: Text(
-                    'Heard: "$spokenText"',
-                    style: const TextStyle(fontSize: 14, color: Colors.blue),
+              // App Title
+              FadeTransition(
+                opacity: _fadeAnimation,
+                child: Text(
+                  'Voice Welcome',
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue.shade800,
+                    letterSpacing: 1.2,
                   ),
                 ),
-              ],
+              ),
 
-              const SizedBox(height: 40),
+              SizedBox(height: 10),
+
+              FadeTransition(
+                opacity: _fadeAnimation,
+                child: Text(
+                  'Enhanced Voice Navigation',
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: Colors.blue.shade600,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ),
+
+              SizedBox(height: 50),
 
               // Instructions
-              Container(
-                padding: const EdgeInsets.all(20),
-                margin: const EdgeInsets.symmetric(horizontal: 40),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(15),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.grey.withOpacity(0.1),
-                      blurRadius: 10,
-                      spreadRadius: 1,
+              FadeTransition(
+                opacity: _fadeAnimation,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 40.0),
+                  child: Text(
+                    'Say "one" to register or "three" to login',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.blue.shade700,
                     ),
-                  ],
+                  ),
                 ),
-                child: const Column(
+              ),
+
+              SizedBox(height: 30),
+
+              // Action buttons
+              FadeTransition(
+                opacity: _fadeAnimation,
+                child: Column(
                   children: [
-                    Text(
-                      'Voice Commands:',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.blue,
+                    Container(
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade100,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.green.shade400,
+                          width: 2,
+                        ),
+                      ),
+                      child: Icon(
+                        Icons.person_add,
+                        size: 40,
+                        color: Colors.green.shade600,
                       ),
                     ),
                     SizedBox(height: 10),
                     Text(
-                      'Say "one" to register\nSay "three" to login',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 16, color: Colors.grey),
+                      'Register',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.green.shade700,
+                      ),
+                    ),
+                    SizedBox(height: 20),
+                    Container(
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade100,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.orange.shade400,
+                          width: 2,
+                        ),
+                      ),
+                      child: Icon(
+                        Icons.login,
+                        size: 40,
+                        color: Colors.orange.shade600,
+                      ),
+                    ),
+                    SizedBox(height: 10),
+                    Text(
+                      'Login',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.orange.shade700,
+                      ),
                     ),
                   ],
                 ),
               ),
+
+              SizedBox(height: 50),
+
+              // Listening indicator
+              if (isListening)
+                Column(
+                  children: [
+                    AnimatedBuilder(
+                      animation: _pulseAnimation,
+                      builder: (context, child) {
+                        return Transform.scale(
+                          scale: _pulseAnimation.value,
+                          child: Container(
+                            width: 80,
+                            height: 80,
+                            decoration: BoxDecoration(
+                              color: Colors.red.shade100,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.red.shade400,
+                                width: 2,
+                              ),
+                            ),
+                            child: Icon(
+                              Icons.mic,
+                              size: 40,
+                              color: Colors.red.shade600,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    SizedBox(height: 15),
+                    Text(
+                      awaitingConfirmation
+                          ? 'Listening for confirmation...'
+                          : 'Listening... Say "one" or "three"',
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: Colors.blue.shade700,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    if (retryCount > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: Text(
+                          'Attempt ${retryCount + 1} of ${maxRetries + 1}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.blue.shade500,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+
+              // Voice configuration indicator
+              if (!isListening && !isSpeaking)
+                Padding(
+                  padding: const EdgeInsets.only(top: 20.0),
+                  child: Text(
+                    'Enhanced voice recognition active',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.blue.shade400,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ),
             ],
           ),
         ),

@@ -15,12 +15,15 @@ import 'firebase_options.dart';
 import 'package:smartsacco/pages/voicewelcome.dart';
 import 'package:smartsacco/pages/voiceregister.dart';
 import 'package:smartsacco/pages/voicelogin.dart';
+import 'package:smartsacco/pages/voice_settings.dart';
 import 'package:smartsacco/utils/logger.dart';
 import 'package:smartsacco/services/notification_service.dart';
 import 'package:app_links/app_links.dart';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:smartsacco/pages/payment_status_screen.dart';
+import 'package:smartsacco/pages/settings_page.dart';
+import 'package:smartsacco/services/user_preferences_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -34,6 +37,9 @@ void main() async {
 
     // Initialize notification service
     await NotificationService().initialize();
+
+    // Initialize user preferences service
+    await UserPreferencesService().initialize();
 
     runApp(const SaccoDashboardApp());
   } catch (e, stack) {
@@ -129,6 +135,8 @@ class _SaccoDashboardAppState extends State<SaccoDashboardApp> {
         '/admin-dashboard': (context) => const AdminMainPage(),
         '/members': (context) => const MembersPage(),
         '/blindmember': (context) => const VoiceMemberDashboard(),
+        '/settings': (context) => const SettingsPage(),
+        '/voiceSettings': (context) => const VoiceSettingsPage(),
         '/email_verification': (context) => EmailVerificationScreen(
           userEmail:
               (ModalRoute.of(context)?.settings.arguments

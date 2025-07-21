@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 // Import your pages
-import 'overview.dart';
+import 'enhanced_dashboard_page.dart';
 import 'loans_page.dart';
-import 'voice_admin_dashboard.dart';
+import 'member_page.dart';
 
 class AdminMainPage extends StatefulWidget {
   const AdminMainPage({super.key});
@@ -17,19 +17,19 @@ class AdminMainPageState extends State<AdminMainPage> {
   int _selectedIndex = 0;
 
   final List<String> _pageTitles = [
-    'Overview',
+    'Enhanced Dashboard',
     'Loan Applications',
-    'Voice Dashboard',
+    'Members',
   ];
 
   Widget _getPage(int index) {
     switch (index) {
       case 0:
-        return const OverviewPage();
+        return const EnhancedAdminDashboard();
       case 1:
         return const LoanPage(); // Your loan list page
       case 2:
-        return const VoiceAdminDashboard(); // Voice-first admin dashboard
+        return const MembersPage(); // Members management page
       default:
         return const Center(child: Text('Page not found'));
     }
@@ -98,7 +98,7 @@ class AdminMainPageState extends State<AdminMainPage> {
             ),
             _buildDrawerItem(0, Icons.dashboard),
             _buildDrawerItem(1, Icons.credit_card),
-            _buildDrawerItem(2, Icons.record_voice_over),
+            _buildDrawerItem(2, Icons.people),
           ],
         ),
       ),

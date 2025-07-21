@@ -1,10 +1,7 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:speech_to_text/speech_to_text.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:smartsacco/services/analytics_service.dart';
-import 'package:smartsacco/services/error_handling_service.dart';
-import 'dart:async';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:permission_handler/permission_handler.dart';
+import 'package:logging/logging.dart';
 
 class EnhancedVoiceService {
   static final EnhancedVoiceService _instance =
@@ -12,620 +9,434 @@ class EnhancedVoiceService {
   factory EnhancedVoiceService() => _instance;
   EnhancedVoiceService._internal();
 
-  final FlutterTts _flutterTts = FlutterTts();
-  final SpeechToText _speechToText = SpeechToText();
-  final AnalyticsService _analytics = AnalyticsService();
-  final ErrorHandlingService _errorHandler = ErrorHandlingService();
+  final Logger _logger = Logger('EnhancedVoiceService');
 
-  // Performance optimization variables
-  bool _isInitialized = false;
-  bool _isSpeaking = false;
+  // TTS and Speech Recognition instances
+  FlutterTts flutterTts = FlutterTts();
+  stt.SpeechToText speech = stt.SpeechToText();
+
+  // Voice configuration
+  VoiceConfig _currentConfig = VoiceConfig.defaultConfig();
+  List<VoiceConfig> _availableConfigs = [];
+
+  // Speech recognition settings
   bool _isListening = false;
-  Timer? _speechTimeout;
-  Timer? _listeningTimeout;
-  final Map<String, String> _voiceCache = {};
-  final Map<String, List<String>> _commandCache = {};
+  bool _isSpeaking = false;
+  String _spokenText = "";
+  int _retryCount = 0;
+  final int _maxRetries = 3;
 
-  // Voice settings for different user types
-  double _speechRate = 0.5;
-  double _pitch = 1.0;
-  double _volume = 1.0;
-  String _selectedLanguage = 'en-US';
-  bool _voiceEnabled = true;
-  bool _autoListen = true;
-  bool _continuousListening = false;
+  // Callbacks
+  Function(String)? _onSpeechResult;
+  Function(String)? _onSpeechError;
+  Function(bool)? _onListeningStateChanged;
+  Function(bool)? _onSpeakingStateChanged;
 
-  // Accessibility profiles
-  static const String _profileBasic = 'basic';
-  static const String _profileAdvanced = 'advanced';
-  static const String _profileExpert = 'expert';
-  static const String _profileElderly = 'elderly';
-  static const String _profileVisuallyImpaired = 'visually_impaired';
-  static const String _profileMotorImpaired = 'motor_impaired';
+  // Initialize the service with enhanced voice support
+  Future<void> initialize({
+    Function(String)? onSpeechResult,
+    Function(String)? onSpeechError,
+    Function(bool)? onListeningStateChanged,
+    Function(bool)? onSpeakingStateChanged,
+  }) async {
+    _onSpeechResult = onSpeechResult;
+    _onSpeechError = onSpeechError;
+    _onListeningStateChanged = onListeningStateChanged;
+    _onSpeakingStateChanged = onSpeakingStateChanged;
 
-  String _currentProfile = _profileBasic;
+    await _requestPermissions();
+    await _initializeTTS();
+    await _loadAvailableVoices();
+    await _initializeSpeechRecognition();
+  }
 
-  // Voice command patterns optimized for different users
-  final Map<String, Map<String, List<String>>> _voiceCommands = {
-    _profileBasic: {
-      'navigation': ['home', 'back', 'menu', 'help', 'stop'],
-      'numbers': [
-        'one',
-        'two',
-        'three',
-        'four',
-        'five',
-        'six',
-        'seven',
-        'eight',
-        'nine',
-        'zero',
-      ],
-      'confirmations': ['yes', 'no', 'okay', 'cancel'],
-    },
-    _profileAdvanced: {
-      'navigation': [
-        'go to home',
-        'go back',
-        'show menu',
-        'get help',
-        'stop speaking',
-      ],
-      'transactions': [
-        'make deposit',
-        'check balance',
-        'view loans',
-        'pay loan',
-      ],
-      'numbers': [
-        'one',
-        'two',
-        'three',
-        'four',
-        'five',
-        'six',
-        'seven',
-        'eight',
-        'nine',
-        'zero',
-      ],
-      'confirmations': ['yes', 'no', 'confirm', 'cancel', 'repeat'],
-    },
-    _profileExpert: {
-      'navigation': [
-        'navigate to home',
-        'return to previous',
-        'display menu',
-        'request assistance',
-        'terminate speech',
-      ],
-      'transactions': [
-        'initiate deposit',
-        'retrieve balance',
-        'display loan information',
-        'process loan payment',
-      ],
-      'numbers': [
-        'one',
-        'two',
-        'three',
-        'four',
-        'five',
-        'six',
-        'seven',
-        'eight',
-        'nine',
-        'zero',
-      ],
-      'confirmations': [
-        'affirmative',
-        'negative',
-        'confirm action',
-        'cancel operation',
-        'repeat instruction',
-      ],
-    },
-    _profileElderly: {
-      'navigation': ['home', 'back', 'menu', 'help', 'stop'],
-      'numbers': [
-        'one',
-        'two',
-        'three',
-        'four',
-        'five',
-        'six',
-        'seven',
-        'eight',
-        'nine',
-        'zero',
-      ],
-      'confirmations': ['yes', 'no', 'okay', 'cancel', 'repeat'],
-    },
-    _profileVisuallyImpaired: {
-      'navigation': ['home', 'back', 'menu', 'help', 'stop', 'read screen'],
-      'transactions': ['deposit', 'balance', 'loans', 'pay'],
-      'numbers': [
-        'one',
-        'two',
-        'three',
-        'four',
-        'five',
-        'six',
-        'seven',
-        'eight',
-        'nine',
-        'zero',
-      ],
-      'confirmations': ['yes', 'no', 'okay', 'cancel', 'repeat', 'read again'],
-    },
-    _profileMotorImpaired: {
-      'navigation': ['home', 'back', 'menu', 'help', 'stop'],
-      'transactions': ['deposit', 'balance', 'loans', 'pay'],
-      'numbers': [
-        'one',
-        'two',
-        'three',
-        'four',
-        'five',
-        'six',
-        'seven',
-        'eight',
-        'nine',
-        'zero',
-      ],
-      'confirmations': ['yes', 'no', 'okay', 'cancel', 'repeat'],
-    },
-  };
-
-  // Performance optimization methods
-  Future<void> initialize() async {
-    if (_isInitialized) return;
-
-    try {
-      await _initializeTTS();
-      await _initializeSTT();
-      await _loadSettings();
-      _isInitialized = true;
-
-      await _analytics.trackFeatureUsage(
-        featureName: 'voice_service_initialization',
-        parameters: {'profile': _currentProfile},
-      );
-    } catch (e) {
-      await _errorHandler.handleVoiceError('service_initialization', e);
+  // Request necessary permissions
+  Future<void> _requestPermissions() async {
+    var status = await Permission.microphone.request();
+    if (status != PermissionStatus.granted) {
+      _logger.warning('Microphone permission not granted');
+      throw Exception('Microphone permission is required for voice features');
     }
   }
 
+  // Initialize TTS with enhanced features
   Future<void> _initializeTTS() async {
     try {
-      await _flutterTts.setLanguage(_selectedLanguage);
-      await _flutterTts.setSpeechRate(_speechRate);
-      await _flutterTts.setPitch(_pitch);
-      await _flutterTts.setVolume(_volume);
+      // Get available voices
+      var voices = await flutterTts.getVoices;
+      _logger.info('Available voices: $voices');
 
-      _flutterTts.setStartHandler(() {
-        _isSpeaking = true;
-        _cancelSpeechTimeout();
-        _startSpeechTimeout();
-      });
+      // Set default configuration
+      await _applyVoiceConfig(_currentConfig);
 
-      _flutterTts.setCompletionHandler(() {
+      // Set up completion handler
+      flutterTts.setCompletionHandler(() {
         _isSpeaking = false;
-        _cancelSpeechTimeout();
-        if (_autoListen && !_isListening) {
-          _startListening();
-        }
+        _onSpeakingStateChanged?.call(false);
       });
 
-      _flutterTts.setErrorHandler((msg) {
-        _isSpeaking = false;
-        _cancelSpeechTimeout();
-        _errorHandler.handleVoiceError('tts_speak', msg);
-      });
+      _logger.info('TTS initialized successfully');
     } catch (e) {
-      await _errorHandler.handleVoiceError('tts_initialization', e);
+      _logger.severe('Failed to initialize TTS: $e');
+      throw Exception('Failed to initialize text-to-speech');
     }
   }
 
-  Future<void> _initializeSTT() async {
+  // Load available voice configurations
+  Future<void> _loadAvailableVoices() async {
+    _availableConfigs = [
+      VoiceConfig.defaultConfig(),
+      VoiceConfig(
+        name: 'British English',
+        language: 'en-GB',
+        speechRate: 0.5,
+        pitch: 1.0,
+        volume: 1.0,
+        voiceType: 'en-GB-Standard-A',
+        accent: 'British',
+        description: 'Clear British accent',
+      ),
+      VoiceConfig(
+        name: 'Australian English',
+        language: 'en-AU',
+        speechRate: 0.5,
+        pitch: 1.0,
+        volume: 1.0,
+        voiceType: 'en-AU-Standard-A',
+        accent: 'Australian',
+        description: 'Australian accent',
+      ),
+      VoiceConfig(
+        name: 'Indian English',
+        language: 'en-IN',
+        speechRate: 0.4,
+        pitch: 1.1,
+        volume: 1.0,
+        voiceType: 'en-IN-Standard-A',
+        accent: 'Indian',
+        description: 'Indian English accent',
+      ),
+      VoiceConfig(
+        name: 'Slow and Clear',
+        language: 'en-US',
+        speechRate: 0.3,
+        pitch: 1.0,
+        volume: 1.0,
+        voiceType: 'en-US-Standard-A',
+        accent: 'American',
+        description: 'Slow and clear pronunciation',
+      ),
+      VoiceConfig(
+        name: 'High Pitch',
+        language: 'en-US',
+        speechRate: 0.5,
+        pitch: 1.3,
+        volume: 1.0,
+        voiceType: 'en-US-Standard-A',
+        accent: 'American',
+        description: 'Higher pitch for better clarity',
+      ),
+      VoiceConfig(
+        name: 'Low Pitch',
+        language: 'en-US',
+        speechRate: 0.5,
+        pitch: 0.8,
+        volume: 1.0,
+        voiceType: 'en-US-Standard-A',
+        accent: 'American',
+        description: 'Lower pitch for deeper voice',
+      ),
+    ];
+  }
+
+  // Initialize speech recognition with enhanced settings
+  Future<void> _initializeSpeechRecognition() async {
     try {
-      final available = await _speechToText.initialize(
-        onError: (error) {
-          _isListening = false;
-          _cancelListeningTimeout();
-          _errorHandler.handleVoiceError('stt_initialize', error);
-        },
+      bool available = await speech.initialize(
         onStatus: (status) {
-          if (status == 'listening') {
-            _isListening = true;
-            _startListeningTimeout();
-          } else if (status == 'notListening') {
-            _isListening = false;
-            _cancelListeningTimeout();
+          _logger.info('Speech status: $status');
+          _isListening = status == 'listening';
+          _onListeningStateChanged?.call(_isListening);
+
+          if (status == 'done' || status == 'notListening') {
+            _handleListeningComplete();
           }
+        },
+        onError: (error) {
+          _logger.warning('Speech error: $error');
+          _isListening = false;
+          _onListeningStateChanged?.call(false);
+          _onSpeechError?.call(error.errorMsg);
         },
       );
 
       if (!available) {
-        await _errorHandler.handleVoiceError(
-          'stt_initialization',
-          'Speech recognition not available',
-        );
+        throw Exception('Speech recognition not available');
       }
+
+      _logger.info('Speech recognition initialized successfully');
     } catch (e) {
-      await _errorHandler.handleVoiceError('stt_initialization', e);
+      _logger.severe('Failed to initialize speech recognition: $e');
+      throw Exception('Failed to initialize speech recognition');
     }
   }
 
-  Future<void> _loadSettings() async {
+  // Apply voice configuration
+  Future<void> _applyVoiceConfig(VoiceConfig config) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      _speechRate = prefs.getDouble('speech_rate') ?? 0.5;
-      _pitch = prefs.getDouble('pitch') ?? 1.0;
-      _volume = prefs.getDouble('volume') ?? 1.0;
-      _selectedLanguage = prefs.getString('selected_language') ?? 'en-US';
-      _voiceEnabled = prefs.getBool('voice_enabled') ?? true;
-      _autoListen = prefs.getBool('auto_listen') ?? true;
-      _continuousListening = prefs.getBool('continuous_listening') ?? false;
-      _currentProfile = prefs.getString('voice_profile') ?? _profileBasic;
-    } catch (e) {
-      await _errorHandler.handleVoiceError('settings_load', e);
-    }
-  }
+      await flutterTts.setLanguage(config.language);
+      await flutterTts.setSpeechRate(config.speechRate);
+      await flutterTts.setPitch(config.pitch);
+      await flutterTts.setVolume(config.volume);
 
-  // Enhanced speak method with performance optimization
-  Future<void> speak(
-    String text, {
-    bool interrupt = true,
-    String? context,
-    Map<String, dynamic>? parameters,
-    bool cache = true,
-  }) async {
-    if (!_voiceEnabled || text.isEmpty) return;
-
-    try {
-      // Check cache for frequently used phrases
-      if (cache && _voiceCache.containsKey(text)) {
-        await _speakCached(text);
-        return;
-      }
-
-      if (interrupt) {
-        await _flutterTts.stop();
-        _cancelSpeechTimeout();
-      }
-
-      await _flutterTts.speak(text);
-
-      // Cache frequently used phrases
-      if (cache && text.length < 100) {
-        _voiceCache[text] = text;
-        if (_voiceCache.length > 50) {
-          _voiceCache.clear(); // Prevent memory overflow
+      // Try to set specific voice if available
+      if (config.voiceType.isNotEmpty) {
+        try {
+          await flutterTts.setVoice({
+            "name": config.voiceType,
+            "locale": config.language,
+          });
+        } catch (e) {
+          _logger.warning('Could not set specific voice: $e');
         }
       }
 
-      // Track analytics
-      await _analytics.trackVoiceCommand(command: text, isSuccess: true);
+      _currentConfig = config;
+      _logger.info('Applied voice config: ${config.name}');
     } catch (e) {
-      await _errorHandler.handleVoiceError('speak', e, voiceData: parameters);
+      _logger.severe('Failed to apply voice config: $e');
     }
   }
 
-  Future<void> _speakCached(String text) async {
-    // Optimized speaking for cached text
-    await _flutterTts.speak(text);
+  // Get available voice configurations
+  List<VoiceConfig> getAvailableConfigs() {
+    return List.from(_availableConfigs);
+  }
+
+  // Get current voice configuration
+  VoiceConfig getCurrentConfig() {
+    return _currentConfig;
+  }
+
+  // Change voice configuration
+  Future<void> changeVoiceConfig(VoiceConfig config) async {
+    await _applyVoiceConfig(config);
+  }
+
+  // Enhanced speech recognition with multiple accent support
+  Future<void> startListening({
+    List<String> triggerWords = const ['one', '1', 'won'],
+    Duration listenFor = const Duration(seconds: 10), // Reduced from 15 to 10
+    Duration pauseFor = const Duration(seconds: 3),   // Reduced from 5 to 3
+  }) async {
+    if (_isListening) {
+      await stopListening();
+    }
+
+    try {
+      _retryCount = 0;
+      _spokenText = "";
+      _isListening = true;
+      _onListeningStateChanged?.call(true);
+
+      await speech.listen(
+        onResult: (result) {
+          _spokenText = result.recognizedWords.toLowerCase();
+          _logger.info('Recognized: $_spokenText');
+
+          // Check for trigger words with enhanced matching
+          bool hasTriggerWord = triggerWords.any(
+            (word) =>
+                _spokenText.contains(word) ||
+                _getAccentVariations(
+                  word,
+                ).any((variation) => _spokenText.contains(variation)),
+          );
+
+          if (hasTriggerWord) {
+            _onSpeechResult?.call(_spokenText);
+          }
+        },
+        listenFor: listenFor,
+        pauseFor: pauseFor,
+        partialResults: true,
+        cancelOnError: false,
+        listenMode: stt.ListenMode.dictation, // Changed from confirmation to dictation for better recognition
+        // Enhanced recognition settings for different accents
+        onSoundLevelChange: (level) {
+          // Optional: Handle sound level changes
+        },
+      );
+    } catch (e) {
+      _logger.severe('Failed to start listening: $e');
+      _isListening = false;
+      _onListeningStateChanged?.call(false);
+      _onSpeechError?.call('Failed to start speech recognition');
+    }
   }
 
   // Stop listening
   Future<void> stopListening() async {
-    if (_isListening) {
-      await _speechToText.stop();
+    try {
+      await speech.stop();
       _isListening = false;
-      _cancelListeningTimeout();
-    }
-  }
-
-  // Start listening (internal method)
-  Future<void> _startListening() async {
-    if (_isListening) return;
-
-    try {
-      final listenOptions = SpeechListenOptions(
-        partialResults: true,
-        cancelOnError: false,
-        listenMode: ListenMode.confirmation,
-      );
-
-      await _speechToText.listen(
-        onResult: (result) {
-          _processPartialResult(result);
-        },
-        listenFor: const Duration(seconds: 15),
-        pauseFor: const Duration(seconds: 3),
-        listenOptions: listenOptions,
-      );
+      _onListeningStateChanged?.call(false);
     } catch (e) {
-      await _errorHandler.handleVoiceError('start_listening', e);
+      _logger.warning('Error stopping speech recognition: $e');
     }
   }
 
-  // Enhanced listening method with performance optimization
-  Future<String?> listenForCommand({
-    Duration timeout = const Duration(seconds: 10),
-    String? prompt,
-    bool continuous = false,
-  }) async {
-    if (!_voiceEnabled) return null;
-
+  // Enhanced speech synthesis with current voice config
+  Future<void> speak(String text) async {
     try {
-      if (prompt != null) {
-        await speak(prompt, interrupt: false);
-      }
+      _isSpeaking = true;
+      _onSpeakingStateChanged?.call(true);
 
-      if (_isListening) {
-        await _speechToText.stop();
-      }
-
-      final listenOptions = SpeechListenOptions(
-        partialResults: true,
-        cancelOnError: false,
-        listenMode: ListenMode.confirmation,
-      );
-
-      final result = await _speechToText.listen(
-        onResult: (result) {
-          _processPartialResult(result);
-        },
-        listenFor: timeout,
-        pauseFor: const Duration(seconds: 3),
-        listenOptions: listenOptions,
-      );
-
-      if (result.finalResult) {
-        final command = result.recognizedWords.toLowerCase().trim();
-
-        // Cache command patterns
-        _cacheCommand(command);
-
-        // Track analytics
-        await _analytics.trackVoiceCommand(command: command, isSuccess: true);
-
-        return command;
-      }
-
-      return null;
+      await flutterTts.speak(text);
     } catch (e) {
-      await _errorHandler.handleVoiceError('listen_for_command', e);
-      return null;
+      _logger.severe('Failed to speak: $e');
+      _isSpeaking = false;
+      _onSpeakingStateChanged?.call(false);
     }
   }
 
-  void _processPartialResult(dynamic result) {
-    // Process partial results for better responsiveness
-    if (result.recognizedWords.isNotEmpty) {
-      final words = result.recognizedWords.toLowerCase();
-
-      // Quick command detection for common patterns
-      for (final category in _voiceCommands[_currentProfile]!.keys) {
-        for (final command in _voiceCommands[_currentProfile]![category]!) {
-          if (words.contains(command)) {
-            _handleQuickCommand(command, category);
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  void _handleQuickCommand(String command, String category) {
-    // Handle quick commands without waiting for final result
-    debugPrint('Quick command detected: $command in category: $category');
-  }
-
-  void _cacheCommand(String command) {
-    if (!_commandCache.containsKey(_currentProfile)) {
-      _commandCache[_currentProfile] = [];
-    }
-
-    _commandCache[_currentProfile]!.add(command);
-
-    // Keep only recent commands
-    if (_commandCache[_currentProfile]!.length > 20) {
-      _commandCache[_currentProfile]!.removeAt(0);
-    }
-  }
-
-  // Profile management for different user types
-  Future<void> setProfile(String profile) async {
-    if (_voiceCommands.containsKey(profile)) {
-      _currentProfile = profile;
-
-      // Adjust settings based on profile
-      await _adjustSettingsForProfile(profile);
-
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('voice_profile', profile);
-
-      await _analytics.trackFeatureUsage(
-        featureName: 'voice_profile_change',
-        parameters: {'profile': profile},
-      );
-    }
-  }
-
-  Future<void> _adjustSettingsForProfile(String profile) async {
-    switch (profile) {
-      case _profileElderly:
-        _speechRate = 0.4;
-        _pitch = 1.2;
-        _volume = 1.0;
-        break;
-      case _profileVisuallyImpaired:
-        _speechRate = 0.6;
-        _pitch = 1.0;
-        _volume = 1.0;
-        _autoListen = true;
-        break;
-      case _profileMotorImpaired:
-        _speechRate = 0.5;
-        _pitch = 1.0;
-        _volume = 1.0;
-        _continuousListening = true;
-        break;
-      case _profileExpert:
-        _speechRate = 0.8;
-        _pitch = 1.0;
-        _volume = 0.8;
-        break;
-      default:
-        _speechRate = 0.5;
-        _pitch = 1.0;
-        _volume = 1.0;
-    }
-
-    await _updateTTS();
-  }
-
-  Future<void> _updateTTS() async {
-    await _flutterTts.setSpeechRate(_speechRate);
-    await _flutterTts.setPitch(_pitch);
-    await _flutterTts.setVolume(_volume);
-  }
-
-  // Performance optimization methods
-  void _startSpeechTimeout() {
-    _speechTimeout = Timer(const Duration(seconds: 30), () {
-      if (_isSpeaking) {
-        _flutterTts.stop();
-        _isSpeaking = false;
-      }
-    });
-  }
-
-  void _cancelSpeechTimeout() {
-    _speechTimeout?.cancel();
-  }
-
-  void _startListeningTimeout() {
-    _listeningTimeout = Timer(const Duration(seconds: 15), () {
-      if (_isListening) {
-        _speechToText.stop();
-        _isListening = false;
-      }
-    });
-  }
-
-  void _cancelListeningTimeout() {
-    _listeningTimeout?.cancel();
-  }
-
-  // Voice command processing with profile-specific optimization
-  Future<Map<String, dynamic>> processVoiceCommand(String command) async {
+  // Stop speaking
+  Future<void> stopSpeaking() async {
     try {
-      final processedCommand = command.toLowerCase().trim();
-      final response = <String, dynamic>{
-        'success': false,
-        'action': null,
-        'parameters': {},
-        'message': 'Command not recognized',
-        'profile': _currentProfile,
-      };
-
-      // Get commands for current profile
-      final profileCommands = _voiceCommands[_currentProfile] ?? {};
-
-      // Check each category for matches
-      for (final category in profileCommands.keys) {
-        for (final pattern in profileCommands[category]!) {
-          if (processedCommand.contains(pattern)) {
-            response['success'] = true;
-            response['action'] = category;
-            response['parameters'] = {
-              'command': pattern,
-              'full_command': processedCommand,
-            };
-            response['message'] = 'Processing $category command: $pattern';
-            break;
-          }
-        }
-        if (response['success']) break;
-      }
-
-      // Track command processing
-      await _analytics.trackVoiceCommand(
-        command: processedCommand,
-        isSuccess: response['success'],
-      );
-
-      return response;
+      await flutterTts.stop();
+      _isSpeaking = false;
+      _onSpeakingStateChanged?.call(false);
     } catch (e) {
-      await _errorHandler.handleVoiceError('process_command', e);
-      return {
-        'success': false,
-        'action': null,
-        'parameters': {},
-        'message': 'Error processing command',
-        'profile': _currentProfile,
-      };
+      _logger.warning('Error stopping TTS: $e');
     }
   }
 
-  // Continuous listening for motor-impaired users
-  Future<void> startContinuousListening({
-    required Function(String) onCommand,
-    Duration checkInterval = const Duration(seconds: 2),
-  }) async {
-    if (!_continuousListening) return;
+  // Get accent variations for better word recognition
+  List<String> _getAccentVariations(String word) {
+    Map<String, List<String>> accentVariations = {
+      'one': ['wan', 'wun', 'won', '1', 'first', 'start'],
+      'two': ['too', 'to', '2', 'second'],
+      'three': ['tree', 'free', '3', 'third'],
+      'four': ['for', 'fore', '4', 'fourth'],
+      'five': ['fife', '5', 'fifth'],
+      'six': ['sicks', '6', 'sixth'],
+      'seven': ['7', 'seventh'],
+      'eight': ['ate', '8', 'eighth'],
+      'nine': ['9', 'ninth'],
+      'ten': ['10', 'tenth'],
+      'yes': ['yeah', 'yep', 'yup', 'sure', 'okay', 'ok'],
+      'no': ['nope', 'nah', 'negative'],
+      'register': ['registration', 'sign up', 'join', 'create account'],
+      'login': ['sign in', 'log in', 'enter', 'access'],
+      'balance': ['bal', 'money', 'amount', 'funds'],
+      'deposit': ['dep', 'add money', 'put money', 'save'],
+      'withdraw': ['withdrawal', 'take money', 'get money', 'cash out'],
+      'loans': ['loan', 'borrow', 'credit'],
+      'transactions': ['trans', 'history', 'activity', 'records'],
+      'settings': ['set', 'config', 'preferences', 'options'],
+      'help': ['assist', 'support', 'guide'],
+      'logout': ['log out', 'sign out', 'exit', 'quit'],
+    };
 
-    Timer.periodic(checkInterval, (timer) async {
-      if (!_isListening && !_isSpeaking) {
-        final command = await listenForCommand(
-          timeout: const Duration(seconds: 5),
-        );
-        if (command != null) {
-          onCommand(command);
-        }
-      }
-    });
+    return accentVariations[word.toLowerCase()] ?? [word];
   }
 
-  // Get available profiles
-  List<String> getAvailableProfiles() {
-    return _voiceCommands.keys.toList();
+  // Handle listening completion with retry logic
+  void _handleListeningComplete() {
+    if (_retryCount < _maxRetries) {
+      _retryCount++;
+      _logger.info('Retry attempt $_retryCount of $_maxRetries');
+    }
   }
 
-  // Get current profile
-  String getCurrentProfile() {
-    return _currentProfile;
+  // Get current listening state
+  bool get isListening => _isListening;
+
+  // Get current speaking state
+  bool get isSpeaking => _isSpeaking;
+
+  // Get spoken text
+  String get spokenText => _spokenText;
+
+  // Get retry count
+  int get retryCount => _retryCount;
+
+  // Get max retries
+  int get maxRetries => _maxRetries;
+
+  // Dispose resources
+  void dispose() {
+    stopListening();
+    stopSpeaking();
+  }
+}
+
+// Voice configuration class
+class VoiceConfig {
+  final String name;
+  final String language;
+  final double speechRate;
+  final double pitch;
+  final double volume;
+  final String voiceType;
+  final String accent;
+  final String description;
+
+  VoiceConfig({
+    required this.name,
+    required this.language,
+    required this.speechRate,
+    required this.pitch,
+    required this.volume,
+    required this.voiceType,
+    required this.accent,
+    required this.description,
+  });
+
+  // Default configuration
+  factory VoiceConfig.defaultConfig() {
+    return VoiceConfig(
+      name: 'Standard American',
+      language: 'en-US',
+      speechRate: 0.5,
+      pitch: 1.0,
+      volume: 1.0,
+      voiceType: 'en-US-Standard-A',
+      accent: 'American',
+      description: 'Clear American accent',
+    );
   }
 
-  // Get commands for current profile
-  Map<String, List<String>> getCurrentCommands() {
-    return _voiceCommands[_currentProfile] ?? {};
+  // Create from map
+  factory VoiceConfig.fromMap(Map<String, dynamic> map) {
+    return VoiceConfig(
+      name: map['name'] ?? '',
+      language: map['language'] ?? 'en-US',
+      speechRate: (map['speechRate'] ?? 0.5).toDouble(),
+      pitch: (map['pitch'] ?? 1.0).toDouble(),
+      volume: (map['volume'] ?? 1.0).toDouble(),
+      voiceType: map['voiceType'] ?? '',
+      accent: map['accent'] ?? '',
+      description: map['description'] ?? '',
+    );
   }
 
-  // Performance monitoring
-  Map<String, dynamic> getPerformanceStats() {
+  // Convert to map
+  Map<String, dynamic> toMap() {
     return {
-      'cache_size': _voiceCache.length,
-      'command_cache_size': _commandCache.length,
-      'is_speaking': _isSpeaking,
-      'is_listening': _isListening,
-      'current_profile': _currentProfile,
-      'speech_rate': _speechRate,
-      'pitch': _pitch,
-      'volume': _volume,
+      'name': name,
+      'language': language,
+      'speechRate': speechRate,
+      'pitch': pitch,
+      'volume': volume,
+      'voiceType': voiceType,
+      'accent': accent,
+      'description': description,
     };
   }
 
-  // Cleanup
-  void dispose() {
-    _cancelSpeechTimeout();
-    _cancelListeningTimeout();
-    _speechToText.stop();
-    _flutterTts.stop();
-    _voiceCache.clear();
-    _commandCache.clear();
+  @override
+  String toString() {
+    return 'VoiceConfig(name: $name, language: $language, accent: $accent)';
   }
 }

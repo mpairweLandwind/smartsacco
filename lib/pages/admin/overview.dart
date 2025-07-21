@@ -30,8 +30,7 @@ class OverviewPageState extends State<OverviewPage> {
   bool _isLoadingTransactions = true;
   bool _isLoadingMemberTransactions = false;
   String _searchQuery = '';
-  // String _selectedMemberId = ''; // Removed unused field
-  // String _selectedMemberName = ''; // Removed unused field
+  bool _showAllTransactions = false; // New flag to control transaction display
   final TextEditingController _searchController = TextEditingController();
 
   // --- FIRESTORE INTEGRATION ENHANCEMENT START ---
@@ -42,12 +41,24 @@ class OverviewPageState extends State<OverviewPage> {
     });
 
     try {
+      // Calculate date for past month
+      final now = DateTime.now();
+      final pastMonth = DateTime(now.year, now.month - 1, now.day);
+
       // Fetch transactions with user details
-      final snapshot = await _firestore
+      Query query = _firestore
           .collectionGroup('transactions')
-          .orderBy('date', descending: true)
-          .limit(50)
-          .get();
+          .orderBy('date', descending: true);
+
+      // If not showing all transactions, filter by date
+      if (!_showAllTransactions) {
+        query = query.where(
+          'date',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(pastMonth),
+        );
+      }
+
+      final snapshot = await query.limit(_showAllTransactions ? 100 : 50).get();
 
       List<Map<String, dynamic>> transactions = [];
 
@@ -225,6 +236,14 @@ class OverviewPageState extends State<OverviewPage> {
     );
   }
   // --- FIRESTORE INTEGRATION ENHANCEMENT END ---
+
+  // Toggle between recent and all transactions
+  void _toggleTransactionView() {
+    setState(() {
+      _showAllTransactions = !_showAllTransactions;
+    });
+    _loadRecentTransactions(); // Reload with new filter
+  }
 
   @override
   void initState() {
@@ -685,30 +704,69 @@ class OverviewPageState extends State<OverviewPage> {
   Widget _buildSearchBar() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8.0),
-      child: TextField(
-        controller: _searchController,
-        decoration: InputDecoration(
-          labelText: 'Search Transactions',
-          hintText: 'Search by description or type',
-          prefixIcon: const Icon(Icons.search),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-          suffixIcon: _searchQuery.isNotEmpty
-              ? IconButton(
-                  icon: const Icon(Icons.clear),
-                  onPressed: () {
-                    _searchController.clear();
-                    setState(() {
-                      _searchQuery = '';
-                    });
-                  },
-                )
-              : null,
-        ),
-        onChanged: (value) {
-          setState(() {
-            _searchQuery = value.toLowerCase();
-          });
-        },
+      child: Column(
+        children: [
+          TextField(
+            controller: _searchController,
+            decoration: InputDecoration(
+              labelText: 'Search Transactions',
+              hintText: 'Search by description or type',
+              prefixIcon: const Icon(Icons.search),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              suffixIcon: _searchQuery.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() {
+                          _searchQuery = '';
+                        });
+                      },
+                    )
+                  : null,
+            ),
+            onChanged: (value) {
+              setState(() {
+                _searchQuery = value.toLowerCase();
+              });
+            },
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                _showAllTransactions
+                    ? 'Showing All Transactions'
+                    : 'Showing Recent Transactions (Past Month)',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.grey,
+                ),
+              ),
+              ElevatedButton.icon(
+                onPressed: _toggleTransactionView,
+                icon: Icon(
+                  _showAllTransactions ? Icons.schedule : Icons.all_inclusive,
+                ),
+                label: Text(_showAllTransactions ? 'Show Recent' : 'Show All'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _showAllTransactions
+                      ? Colors.orange
+                      : Colors.blue,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

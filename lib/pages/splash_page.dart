@@ -1,12 +1,8 @@
 // ignore_for_file: library_private_types_in_public_api, deprecated_member_use
 
 import 'package:flutter/material.dart';
-import 'package:flutter_tts/flutter_tts.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
-import 'package:permission_handler/permission_handler.dart';
+import 'package:smartsacco/services/enhanced_voice_service.dart';
 import 'package:logging/logging.dart';
-import '../services/smartsacco_audio_manager.dart';
-import '../services/enhanced_voice_navigation.dart';
 
 class SplashPage extends StatefulWidget {
   const SplashPage({super.key});
@@ -16,44 +12,30 @@ class SplashPage extends StatefulWidget {
 }
 
 class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
-  FlutterTts flutterTts = FlutterTts();
-  stt.SpeechToText speech = stt.SpeechToText();
-  bool isListening = false;
-  bool isSpeaking = false;
-  String spokenText = "";
-  int retryCount = 0;
-  final int maxRetries = 3;
+  final EnhancedVoiceService _voiceService = EnhancedVoiceService();
+  final Logger _logger = Logger('SplashPage');
+
+  // Animation controllers
   late AnimationController _fadeController;
   late AnimationController _scaleController;
   late AnimationController _pulseController;
   late Animation<double> _fadeAnimation;
   late Animation<double> _scaleAnimation;
   late Animation<double> _pulseAnimation;
-  final Logger _logger = Logger('SplashPage');
+
+  // Voice state
+  bool isListening = false;
+  bool isSpeaking = false;
+  String spokenText = "";
+  int retryCount = 0;
+  final int maxRetries = 3;
 
   @override
   void initState() {
     super.initState();
     _initAnimations();
-    _initTTS();
-    _requestPermissions();
-    _initializeEnhancedVoiceNavigation();
+    _initializeVoiceService();
     _startWelcomeSequence();
-  }
-
-  // Initialize enhanced voice navigation
-  Future<void> _initializeEnhancedVoiceNavigation() async {
-    await EnhancedVoiceNavigation().initialize();
-    EnhancedVoiceNavigation().setCurrentScreen('splash');
-
-    // Listen for navigation events
-    EnhancedVoiceNavigation().navigationEventStream.listen((event) {
-      _handleNavigationEvent(event);
-    });
-
-    EnhancedVoiceNavigation().voiceCommandStream.listen((event) {
-      _handleEnhancedVoiceCommand(event);
-    });
   }
 
   void _initAnimations() {
@@ -84,40 +66,79 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
     );
   }
 
-  Future<void> _initTTS() async {
-    await flutterTts.setLanguage("en-US");
-    await flutterTts.setSpeechRate(0.5);
-    await flutterTts.setVolume(1.0);
-    await flutterTts.setPitch(1.0);
-
-    // Set up TTS completion handler
-    flutterTts.setCompletionHandler(() {
-      if (mounted) {
-        setState(() {
-          isSpeaking = false;
-        });
-        // Start listening after TTS finishes
-        if (!isListening) {
-          _startListening();
-        }
-      }
-    });
-  }
-
-  Future<void> _requestPermissions() async {
-    var status = await Permission.microphone.request();
-    if (status != PermissionStatus.granted) {
+  Future<void> _initializeVoiceService() async {
+    try {
+      await _voiceService.initialize(
+        onSpeechResult: _handleSpeechResult,
+        onSpeechError: _handleSpeechError,
+        onListeningStateChanged: _handleListeningStateChanged,
+        onSpeakingStateChanged: _handleSpeakingStateChanged,
+      );
+      _logger.info('Enhanced voice service initialized successfully');
+    } catch (e) {
+      _logger.severe('Failed to initialize voice service: $e');
       _showError(
-        "Microphone permission is required for voice navigation. Please tap to continue.",
+        "Voice service initialization failed. Please tap to continue.",
       );
     }
   }
 
-  Future<void> _startWelcomeSequence() async {
-    // Register with audio manager
-    SmartSaccoAudioManager().registerScreen('splash', flutterTts, speech);
-    SmartSaccoAudioManager().activateScreenAudio('splash');
+  void _handleSpeechResult(String text) {
+    if (mounted) {
+      setState(() {
+        spokenText = text.toLowerCase();
+      });
 
+      _logger.info('Recognized: $spokenText');
+
+      // Enhanced trigger word detection with accent variations
+      List<String> triggerWords = [
+        'one',
+        '1',
+        'won',
+        'wan',
+        'wun',
+        'first',
+        'start',
+      ];
+      bool hasTriggerWord = triggerWords.any(
+        (word) => spokenText.contains(word),
+      );
+
+      if (hasTriggerWord) {
+        _handleVoiceNavigation();
+      }
+    }
+  }
+
+  void _handleSpeechError(String error) {
+    _logger.warning('Speech error: $error');
+    _handleSpeechErrorInternal(error);
+  }
+
+  void _handleListeningStateChanged(bool listening) {
+    if (mounted) {
+      setState(() {
+        isListening = listening;
+      });
+
+      if (listening) {
+        _pulseController.repeat(reverse: true);
+      } else {
+        _pulseController.stop();
+      }
+    }
+  }
+
+  void _handleSpeakingStateChanged(bool speaking) {
+    if (mounted) {
+      setState(() {
+        isSpeaking = speaking;
+      });
+    }
+  }
+
+  Future<void> _startWelcomeSequence() async {
     // Start animations
     _fadeController.forward();
     await Future.delayed(Duration(milliseconds: 500));
@@ -130,272 +151,124 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
 
   Future<void> _speakWelcome() async {
     String welcomeMessage =
-        "Welcome to SmartSacco! Say 'register' to create a new account, 'login' to sign in with your PIN, 'voice mode' for voice-first experience, or tap anywhere on the screen to proceed normally. Say 'help' for available commands.";
+        "Welcome to SmartSacco application. If you are visually impaired, say 'one' to continue with voice navigation, or tap anywhere on the screen to proceed normally.";
 
-    setState(() {
-      isSpeaking = true;
-    });
+    await _voiceService.speak(welcomeMessage);
 
-    await SmartSaccoAudioManager().speakIfActive('splash', welcomeMessage);
-
-    // Start continuous listening for voice commands
-    SmartSaccoAudioManager().startContinuousListening('splash');
-
-    // Listen for voice commands
-    SmartSaccoAudioManager().voiceCommandStream.listen((event) {
-      _handleVoiceCommand(event);
-    });
-  }
-
-  void _handleVoiceCommand(String command) {
-    _logger.info('Voice command received: $command');
-
-    if (command.startsWith('register') || command.contains('register')) {
-      _navigateToVoiceRegistration();
-    } else if (command.startsWith('login') || command.contains('login')) {
-      _navigateToVoiceLogin();
-    } else if (command.startsWith('help') || command.contains('help')) {
-      _speakHelp();
-    } else if (command.startsWith('voice_mode') ||
-        command.contains('voice mode')) {
-      _navigateToVoiceWelcome();
-    } else if (command.startsWith('touch_mode') ||
-        command.contains('touch mode')) {
-      _navigateToMainApp(accessibilityMode: false);
-    } else if (command.startsWith('start_app') || command.contains('start')) {
-      _navigateToMainApp(accessibilityMode: false);
-    }
-  }
-
-  // Handle enhanced voice commands
-  void _handleEnhancedVoiceCommand(String event) {
-    final parts = event.split(':');
-    if (parts.length >= 2) {
-      final commandType = parts[0];
-      final fullCommand = parts.sublist(1).join(':');
-
-      _logger.info('Enhanced voice command: $commandType - $fullCommand');
-
-      // Process the command through enhanced navigation
-      EnhancedVoiceNavigation().processVoiceCommand(fullCommand);
-    }
-  }
-
-  // Handle navigation events
-  void _handleNavigationEvent(String event) {
-    _logger.info('Navigation event: $event');
-
-    if (event.startsWith('navigate:')) {
-      final screenId = event.split(':')[1];
-      _handleScreenNavigation(screenId);
-    } else if (event == 'logout') {
-      _handleLogout();
-    }
-  }
-
-  // Handle screen navigation
-  void _handleScreenNavigation(String screenId) {
-    switch (screenId) {
-      case 'voice_register':
-        _navigateToVoiceRegistration();
-        break;
-      case 'voice_login':
-        _navigateToVoiceLogin();
-        break;
-      case 'member_dashboard':
-        _navigateToMainApp(accessibilityMode: true);
-        break;
-      default:
-        _logger.info('Unknown screen navigation: $screenId');
-    }
-  }
-
-  // Handle logout
-  void _handleLogout() {
-    _navigateToMainApp(accessibilityMode: false);
-  }
-
-  void _navigateToVoiceRegistration() async {
-    await SmartSaccoAudioManager().speakIfActive(
-      'splash',
-      "Navigating to voice registration. I'll guide you through creating your account step by step.",
-    );
-    Future.delayed(Duration(seconds: 2), () {
-      if (mounted) {
-        Navigator.pushReplacementNamed(context, '/voiceRegister');
-      }
-    });
-  }
-
-  void _navigateToVoiceLogin() async {
-    await SmartSaccoAudioManager().speakIfActive(
-      'splash',
-      "Navigating to voice login. Please prepare to speak your PIN.",
-    );
-    Future.delayed(Duration(seconds: 2), () {
-      if (mounted) {
-        Navigator.pushReplacementNamed(context, '/voiceLogin');
-      }
-    });
-  }
-
-  void _navigateToVoiceWelcome() async {
-    await SmartSaccoAudioManager().speakIfActive(
-      'splash',
-      "Navigating to voice-first experience. I'll guide you through everything.",
-    );
-    Future.delayed(Duration(seconds: 2), () {
-      if (mounted) {
-        Navigator.pushReplacementNamed(context, '/voiceWelcome');
-      }
-    });
-  }
-
-  void _speakHelp() async {
-    await SmartSaccoAudioManager().speakIfActive(
-      'splash',
-      "Available commands: Say 'register' to create a new account, 'login' to sign in with your PIN, 'voice mode' for voice-first experience, 'touch mode' for normal navigation, or tap the screen to continue. Say 'help' anytime for this list of commands.",
-    );
+    // Start listening after speaking
+    await Future.delayed(Duration(seconds: 1));
+    await _startListening();
   }
 
   Future<void> _startListening() async {
-    // Stop any existing listening session
-    if (isListening) {
-      await speech.stop();
-    }
-
-    bool available = await speech.initialize(
-      onStatus: (val) {
-        _logger.info('Speech status: $val'); // Debug log
-        if (mounted) {
-          setState(() {
-            isListening = val == 'listening';
-          });
-
-          // Handle different status scenarios
-          if (val == 'done' || val == 'notListening') {
-            _handleListeningComplete();
-          }
-        }
-      },
-      onError: (val) {
-        _logger.warning('Speech error: $val'); // Debug log
-        if (mounted) {
-          setState(() {
-            isListening = false;
-          });
-          _handleSpeechError(val.errorMsg);
-        }
-      },
-    );
-
-    if (available) {
-      if (mounted) {
-        setState(() {
-          isListening = true;
-          spokenText = "";
-        });
-
-        // Start pulse animation for microphone
-        _pulseController.repeat(reverse: true);
-      }
-
-      await speech.listen(
-        onResult: (val) {
-          if (mounted) {
-            setState(() {
-              spokenText = val.recognizedWords.toLowerCase();
-            });
-
-            _logger.info('Recognized: $spokenText'); // Debug log
-
-            // Check for trigger words
-            if (spokenText.contains('register') ||
-                spokenText.contains('sign up') ||
-                spokenText.contains('create account')) {
-              _navigateToVoiceRegistration();
-            } else if (spokenText.contains('login') ||
-                spokenText.contains('sign in') ||
-                spokenText.contains('enter')) {
-              _navigateToVoiceLogin();
-            } else if (spokenText.contains('help') ||
-                spokenText.contains('commands')) {
-              _speakHelp();
-            }
-          }
-        },
-        listenFor: Duration(seconds: 15), // Increased listening time
-        pauseFor: Duration(seconds: 5), // Increased pause time
-        partialResults: true, // Enable partial results
-        cancelOnError: false, // Don't cancel on minor errors
-        listenMode:
-            stt.ListenMode.confirmation, // Better for command recognition
+    try {
+      await _voiceService.startListening(
+        triggerWords: ['one', '1', 'won', 'wan', 'wun', 'first', 'start'],
+        listenFor: Duration(seconds: 10), // Reduced from 15 to 10
+        pauseFor: Duration(seconds: 3), // Reduced from 5 to 3
       );
-    } else {
+    } catch (e) {
+      _logger.severe('Failed to start listening: $e');
       _showError("Speech recognition not available. Please tap to continue.");
     }
   }
 
   void _handleListeningComplete() {
     _pulseController.stop();
-    // Auto-restart listening for continuous interaction
-    Future.delayed(Duration(seconds: 1), () {
-      if (mounted && !isSpeaking) {
-        _startListening();
-      }
-    });
-  }
 
-  void _handleSpeechError(String errorMsg) {
-    _logger.warning('Speech error: $errorMsg');
-    // Provide helpful error message and retry
-    if (retryCount < maxRetries) {
+    // If we haven't detected the trigger word and haven't exceeded retries
+    List<String> triggerWords = [
+      'one',
+      '1',
+      'won',
+      'wan',
+      'wun',
+      'first',
+      'start',
+    ];
+    bool hasTriggerWord = triggerWords.any((word) => spokenText.contains(word));
+
+    if (!hasTriggerWord && retryCount < maxRetries) {
       retryCount++;
-      Future.delayed(Duration(seconds: 2), () {
-        if (mounted) {
-          _startListening();
-        }
-      });
-    } else {
-      _showError(
-        "Voice recognition is having trouble. Please tap to continue normally.",
+
+      String retryMessage = retryCount == 1
+          ? "I didn't catch that. Please say 'one' clearly to continue with voice navigation."
+          : retryCount == 2
+          ? "Let's try again. Say 'one' to continue with voice navigation."
+          : "One more time. Say 'one' for voice navigation, or tap the screen to continue normally.";
+
+      _speakAndRetry(retryMessage);
+    } else if (retryCount >= maxRetries) {
+      _speakAndRetry(
+        "No problem. You can tap anywhere on the screen to continue.",
       );
     }
   }
 
-  void _handleVoiceNavigation() async {
-    if (mounted) {
-      setState(() {
-        isListening = false;
-      });
-    }
-
+  void _handleSpeechErrorInternal(String errorMsg) {
     _pulseController.stop();
-    speech.stop();
 
-    setState(() {
-      isSpeaking = true;
-    });
+    _logger.warning('Speech error details: $errorMsg');
 
-    flutterTts.setCompletionHandler(() {
-      if (mounted) {
-        setState(() {
-          isSpeaking = false;
-        });
-        _navigateToMainApp(accessibilityMode: true);
+    // Handle specific error types
+    if (errorMsg.contains('network') || errorMsg.contains('connection')) {
+      _speakAndRetry(
+        "Network issue detected. Please check your connection and try saying 'one' again.",
+      );
+    } else if (errorMsg.contains('no-speech') ||
+        errorMsg.contains('speech-timeout') ||
+        errorMsg.contains('error_speech_timeout')) {
+      // Handle speech timeout more gracefully
+      if (retryCount < maxRetries) {
+        retryCount++;
+        _speakAndRetry(
+          "I didn't hear anything. Please say 'one' clearly to continue with voice navigation.",
+        );
+      } else {
+        _speakAndRetry(
+          "Voice recognition is having trouble. You can tap the screen to continue normally.",
+        );
       }
-    });
-    await SmartSaccoAudioManager().speakIfActive(
-      'splash',
-      "Navigating you to the welcome screen.",
-    );
+    } else if (retryCount < maxRetries) {
+      retryCount++;
+      _speakAndRetry(
+        "Let's try again. Say 'one' to continue with voice navigation.",
+      );
+    } else {
+      _speakAndRetry(
+        "Voice recognition is having trouble. Please tap the screen to continue.",
+      );
+    }
+  }
+
+  Future<void> _speakAndRetry(String message) async {
+    await _voiceService.speak(message);
+
+    // Start listening again after speaking with a longer delay for better stability
+    await Future.delayed(Duration(seconds: 3));
+    await _startListening();
+  }
+
+  void _handleVoiceNavigation() async {
+    await _voiceService.stopListening();
+    await _voiceService.speak("Navigating you to the welcome screen.");
+
+    // Navigate after speaking
+    await Future.delayed(Duration(seconds: 2));
+    _navigateToMainApp(accessibilityMode: true);
   }
 
   void _navigateToMainApp({bool accessibilityMode = false}) {
     // Stop all audio activities
-    speech.stop();
-    flutterTts.stop();
-    SmartSaccoAudioManager().deactivateScreenAudio('splash');
+    _voiceService.stopListening();
+    _voiceService.stopSpeaking();
+
+    // Show a brief message before navigating
+    if (accessibilityMode) {
+      _voiceService.speak("Taking you to voice navigation.");
+    } else {
+      _voiceService.speak("Taking you to the main app.");
+    }
 
     Future.delayed(Duration(seconds: 2), () {
       if (mounted) {
@@ -409,10 +282,17 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
   }
 
   void _showError(String message) {
-    SmartSaccoAudioManager().speakIfActive('splash', message);
+    _voiceService.speak(message);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message), duration: Duration(seconds: 3)),
+        SnackBar(
+          content: Text(message),
+          duration: Duration(seconds: 3),
+          action: SnackBarAction(
+            label: 'Skip Voice',
+            onPressed: () => _navigateToMainApp(),
+          ),
+        ),
       );
     }
   }
@@ -422,9 +302,7 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
     _fadeController.dispose();
     _scaleController.dispose();
     _pulseController.dispose();
-    flutterTts.stop();
-    speech.stop();
-    SmartSaccoAudioManager().unregisterScreen('splash');
+    _voiceService.dispose();
     super.dispose();
   }
 
@@ -433,10 +311,7 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
     return Scaffold(
       backgroundColor: Colors.blue.shade50,
       body: GestureDetector(
-        onTap: () {
-          // Allow manual navigation for users who prefer touch
-          _navigateToMainApp(accessibilityMode: false);
-        },
+        onTap: () => _navigateToMainApp(),
         child: Container(
           width: double.infinity,
           height: double.infinity,
@@ -450,168 +325,156 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Logo/Icon with animations
-              FadeTransition(
-                opacity: _fadeAnimation,
-                child: ScaleTransition(
-                  scale: _scaleAnimation,
-                  child: AnimatedBuilder(
-                    animation: _pulseAnimation,
-                    builder: (context, child) {
-                      return Transform.scale(
-                        scale: isListening ? _pulseAnimation.value : 1.0,
-                        child: Container(
-                          width: 120,
-                          height: 120,
-                          decoration: BoxDecoration(
-                            color: isListening
-                                ? Colors.orange.shade600
-                                : Colors.blue.shade600,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color:
-                                    (isListening
-                                            ? Colors.orange.shade300
-                                            : Colors.blue.shade300)
-                                        .withOpacity(0.5),
-                                spreadRadius: 5,
-                                blurRadius: 15,
-                                offset: Offset(0, 3),
-                              ),
-                            ],
-                          ),
-                          child: Icon(
-                            isListening ? Icons.mic : Icons.account_balance,
-                            size: 60,
-                            color: Colors.white,
+              // Logo/Icon
+              AnimatedBuilder(
+                animation: _scaleAnimation,
+                builder: (context, child) {
+                  return Transform.scale(
+                    scale: _scaleAnimation.value,
+                    child: FadeTransition(
+                      opacity: _fadeAnimation,
+                      child: Container(
+                        width: 150,
+                        height: 150,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.blue.shade300.withOpacity(0.5),
+                              spreadRadius: 5,
+                              blurRadius: 15,
+                              offset: Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: ClipOval(
+                          child: Image.asset(
+                            'assets/smartsacco.png',
+                            width: 140,
+                            height: 140,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) {
+                              // Fallback to icon if image fails to load
+                              return Container(
+                                width: 140,
+                                height: 140,
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.shade600,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  Icons.account_balance,
+                                  size: 60,
+                                  color: Colors.white,
+                                ),
+                              );
+                            },
                           ),
                         ),
-                      );
-                    },
-                  ),
-                ),
+                      ),
+                    ),
+                  );
+                },
               ),
 
-              SizedBox(height: 40),
+              SizedBox(height: 30),
 
-              // Title
+              // App Title
               FadeTransition(
                 opacity: _fadeAnimation,
                 child: Text(
-                  "SmartSacco",
+                  'SmartSacco',
                   style: TextStyle(
                     fontSize: 32,
                     fontWeight: FontWeight.bold,
                     color: Colors.blue.shade800,
-                    letterSpacing: 1.5,
+                    letterSpacing: 1.2,
                   ),
                 ),
               ),
 
               SizedBox(height: 10),
 
-              // Subtitle
               FadeTransition(
                 opacity: _fadeAnimation,
                 child: Text(
-                  "Voice-First Financial Management",
+                  'Your Smart Financial Partner',
                   style: TextStyle(
                     fontSize: 16,
                     color: Colors.blue.shade600,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-              ),
-
-              SizedBox(height: 60),
-
-              // Status indicator
-              FadeTransition(
-                opacity: _fadeAnimation,
-                child: Container(
-                  padding: EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-                  margin: EdgeInsets.symmetric(horizontal: 40),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(25),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.blue.shade200.withOpacity(0.5),
-                        spreadRadius: 2,
-                        blurRadius: 8,
-                        offset: Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 12,
-                        height: 12,
-                        decoration: BoxDecoration(
-                          color: isListening ? Colors.green : Colors.orange,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      SizedBox(width: 12),
-                      Text(
-                        isListening
-                            ? "Listening for voice commands..."
-                            : isSpeaking
-                            ? "Speaking..."
-                            : "Ready for voice commands",
-                        style: TextStyle(
-                          color: Colors.blue.shade800,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              SizedBox(height: 30),
-
-              // Voice command hint
-              if (spokenText.isNotEmpty)
-                FadeTransition(
-                  opacity: _fadeAnimation,
-                  child: Container(
-                    padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                    margin: EdgeInsets.symmetric(horizontal: 40),
-                    decoration: BoxDecoration(
-                      color: Colors.blue.shade100,
-                      borderRadius: BorderRadius.circular(15),
-                    ),
-                    child: Text(
-                      "Heard: \"$spokenText\"",
-                      style: TextStyle(
-                        color: Colors.blue.shade800,
-                        fontSize: 14,
-                        fontStyle: FontStyle.italic,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                ),
-
-              SizedBox(height: 40),
-
-              // Manual navigation hint
-              FadeTransition(
-                opacity: _fadeAnimation,
-                child: Text(
-                  "Tap anywhere to continue without voice",
-                  style: TextStyle(
-                    color: Colors.blue.shade600,
-                    fontSize: 14,
                     fontStyle: FontStyle.italic,
                   ),
                 ),
               ),
+
+              SizedBox(height: 50),
+
+              // Listening indicator
+              if (isListening)
+                Column(
+                  children: [
+                    AnimatedBuilder(
+                      animation: _pulseAnimation,
+                      builder: (context, child) {
+                        return Transform.scale(
+                          scale: _pulseAnimation.value,
+                          child: Container(
+                            width: 80,
+                            height: 80,
+                            decoration: BoxDecoration(
+                              color: Colors.red.shade100,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.red.shade400,
+                                width: 2,
+                              ),
+                            ),
+                            child: Icon(
+                              Icons.mic,
+                              size: 40,
+                              color: Colors.red.shade600,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    SizedBox(height: 15),
+                    Text(
+                      'Listening... Say "one" to continue',
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: Colors.blue.shade700,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    if (retryCount > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: Text(
+                          'Attempt ${retryCount + 1} of ${maxRetries + 1}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.blue.shade500,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+
+              // Voice configuration indicator
+              if (!isListening && !isSpeaking)
+                Padding(
+                  padding: const EdgeInsets.only(top: 20.0),
+                  child: Text(
+                    'Enhanced voice recognition active',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.blue.shade400,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ),
             ],
           ),
         ),

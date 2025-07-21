@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:logging/logging.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../services/smartsacco_audio_manager.dart';
 
 final _logger = Logger('VoiceLoginPage');
 
@@ -23,15 +23,16 @@ class _VoiceLoginPageState extends State<VoiceLoginPage>
   bool isListening = false;
   String spokenText = "";
   bool isLoggingIn = false;
-
+  
   // Firebase instances
+  final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-
+  
   // Login data
   String enteredPin = "";
   int loginAttempts = 0;
   final int maxAttempts = 3;
-
+  
   late AnimationController _fadeController;
   late AnimationController _pulseController;
   late Animation<double> _fadeAnimation;
@@ -55,10 +56,9 @@ class _VoiceLoginPageState extends State<VoiceLoginPage>
       vsync: this,
     );
 
-    _fadeAnimation = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(parent: _fadeController, curve: Curves.easeIn));
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _fadeController, curve: Curves.easeIn),
+    );
 
     _pulseAnimation = Tween<double>(begin: 1.0, end: 1.2).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
@@ -73,24 +73,19 @@ class _VoiceLoginPageState extends State<VoiceLoginPage>
   }
 
   Future<void> _startLoginProcess() async {
-    // Register with audio manager
-    SmartSaccoAudioManager().registerScreen('voiceLogin', flutterTts, speech);
-    SmartSaccoAudioManager().activateScreenAudio('voiceLogin');
-
     _fadeController.forward();
     _pulseController.repeat(reverse: true);
-
+    
     await Future.delayed(Duration(seconds: 1));
     await _speakWelcomeMessage();
   }
 
   Future<void> _speakWelcomeMessage() async {
-    String message =
-        "Welcome to SmartSacco voice login! Please say your 4-digit PIN one digit at a time. For example, say 'one two three four' for PIN 1234.";
-
+    String message = "Welcome to SmartSacco login! Please say your 4-digit PIN one digit at a time.";
+    
     try {
-      await SmartSaccoAudioManager().speakIfActive('voiceLogin', message);
-
+      await flutterTts.speak(message);
+      
       Future.delayed(Duration(seconds: message.length ~/ 10 + 2), () {
         if (mounted) {
           _startListening();
@@ -120,7 +115,7 @@ class _VoiceLoginPageState extends State<VoiceLoginPage>
           setState(() {
             isListening = val == 'listening';
           });
-
+          
           if (val == 'notListening' && spokenText.isEmpty) {
             Future.delayed(Duration(seconds: 1), () {
               if (mounted && !isListening) {
@@ -171,21 +166,14 @@ class _VoiceLoginPageState extends State<VoiceLoginPage>
     }
   }
 
-  // In _processPinInput, add support for 'repeat' command
   void _processPinInput(String input) {
     setState(() {
       isListening = false;
     });
-    if (input.toLowerCase().contains('repeat')) {
-      _repeatPinEntry();
-      return;
-    }
-    if (input.toLowerCase().contains('help')) {
-      _speakHelp();
-      return;
-    }
+
     // Process spoken digits one by one
     String processedPin = _processSpokenDigits(input);
+    
     if (processedPin.length == 4) {
       setState(() {
         enteredPin = processedPin;
@@ -196,126 +184,103 @@ class _VoiceLoginPageState extends State<VoiceLoginPage>
       if (loginAttempts >= maxAttempts) {
         _handleMaxAttemptsReached();
       } else {
-        _askForPinAgain(
-          "Please say each digit of your PIN one by one. For example, say 'one two three four'.",
-        );
+        _askForPinAgain("Please say each digit of your PIN one by one.");
       }
     }
   }
 
   String _processSpokenDigits(String input) {
     String lowerInput = input.toLowerCase().trim();
-
+    
     // Replace spoken numbers with digits
     Map<String, String> numberWords = {
-      'zero': '0',
-      'oh': '0',
-      'o': '0',
-      'one': '1',
-      'won': '1',
-      'two': '2',
-      'to': '2',
-      'too': '2',
-      'three': '3',
-      'tree': '3',
-      'four': '4',
-      'for': '4',
-      'fore': '4',
+      'zero': '0', 'oh': '0', 'o': '0',
+      'one': '1', 'won': '1',
+      'two': '2', 'to': '2', 'too': '2',
+      'three': '3', 'tree': '3',
+      'four': '4', 'for': '4', 'fore': '4',
       'five': '5',
-      'six': '6',
-      'sex': '6',
+      'six': '6', 'sex': '6',
       'seven': '7',
-      'eight': '8',
-      'ate': '8',
-      'nine': '9',
-      'niner': '9',
+      'eight': '8', 'ate': '8',
+      'nine': '9', 'niner': '9',
     };
-
+    
     String processed = lowerInput;
-
+    
     // Replace number words with digits
     numberWords.forEach((word, digit) {
       processed = processed.replaceAll(RegExp(r'\b' + word + r'\b'), digit);
     });
-
+    
     // Extract only digits from the processed string
     String digits = processed.replaceAll(RegExp(r'[^0-9]'), '');
-
+    
     return digits;
   }
 
   Future<void> _verifyPin(String pin) async {
-    setState(() {
-      isLoggingIn = true;
-    });
+  setState(() {
+    isLoggingIn = true;
+  });
 
-    try {
-      await SmartSaccoAudioManager().speakIfActive(
-        'voiceLogin',
-        "Verifying your PIN, please wait...",
-      );
+  try {
+    await flutterTts.speak("Verifying your PIN, please wait...");
+    
+    // Query Firestore to find user with matching PIN
+    QuerySnapshot querySnapshot = await _firestore
+        .collection('users')
+        .where('pin', isEqualTo: pin)  // PIN is stored as string, so this should work
+        .limit(1)
+        .get();
 
-      // Query Firestore to find user with matching PIN
-      QuerySnapshot querySnapshot = await _firestore
-          .collection('users')
-          .where(
-            'pin',
-            isEqualTo: pin,
-          ) // PIN is stored as string, so this should work
-          .limit(1)
-          .get();
-
-      if (querySnapshot.docs.isNotEmpty) {
-        // PIN found, get user data
-        DocumentSnapshot userDoc = querySnapshot.docs.first;
-        Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
-
-        // Success - navigate to member dashboard with user data
-        await SmartSaccoAudioManager().speakIfActive(
-          'voiceLogin',
-          "Login successful! Welcome back, ${userData['fullName']}!",
-        );
-
-        // Reset login attempts on success
-        loginAttempts = 0;
-
-        Future.delayed(Duration(seconds: 3), () {
-          if (mounted) {
-            // Pass user data to the dashboard
-            Navigator.pushReplacementNamed(
-              context,
-              '/blindmember',
-              arguments: userData, // Pass the user data to the dashboard
-            );
-          }
-        });
-      } else {
-        // PIN not found
-        loginAttempts++;
-        if (loginAttempts >= maxAttempts) {
-          _handleMaxAttemptsReached();
-        } else {
-          await _handleIncorrectPin();
+    if (querySnapshot.docs.isNotEmpty) {
+      // PIN found, get user data
+      DocumentSnapshot userDoc = querySnapshot.docs.first;
+      Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
+      
+      // Success - navigate to member dashboard with user data
+      await flutterTts.speak("Login successful! Welcome back, ${userData['fullName']}!");
+      
+      // Reset login attempts on success
+      loginAttempts = 0;
+      
+      Future.delayed(Duration(seconds: 3), () {
+        if (mounted) {
+          // Pass user data to the dashboard
+          Navigator.pushReplacementNamed(
+            context, 
+            '/blindmember',
+            arguments: userData, // Pass the user data to the dashboard
+          );
         }
-      }
-    } catch (e) {
-      _logger.warning("Login error: $e");
-      await _handleLoginError(
-        "Login failed due to a network error. Please try again.",
-      );
-    } finally {
-      setState(() {
-        isLoggingIn = false;
       });
+      
+    } else {
+      // PIN not found
+      loginAttempts++;
+      if (loginAttempts >= maxAttempts) {
+        _handleMaxAttemptsReached();
+      } else {
+        await _handleIncorrectPin();
+      }
     }
+    
+  } catch (e) {
+    _logger.warning("Login error: $e");
+    await _handleLoginError("Login failed due to a network error. Please try again.");
+  } finally {
+    setState(() {
+      isLoggingIn = false;
+    });
   }
+}
 
   Future<void> _handleIncorrectPin() async {
-    String message =
-        "Incorrect PIN. Please say each digit of your PIN one by one again.";
-
-    await SmartSaccoAudioManager().speakIfActive('voiceLogin', message);
-
+    String message = "Incorrect PIN. Please say each digit of your PIN one by one again.";
+    
+    await flutterTts.speak(message);
+    
     Future.delayed(Duration(seconds: message.length ~/ 10 + 2), () {
       if (mounted) {
         _startListening();
@@ -324,24 +289,20 @@ class _VoiceLoginPageState extends State<VoiceLoginPage>
   }
 
   Future<void> _handleMaxAttemptsReached() async {
-    String message =
-        "Maximum login attempts reached. Please try again later or contact support.";
-
-    await SmartSaccoAudioManager().speakIfActive('voiceLogin', message);
-
+    String message = "Maximum login attempts reached. Please try again later or contact support.";
+    
+    await flutterTts.speak(message);
+    
     Future.delayed(Duration(seconds: 5), () {
       if (mounted) {
-        Navigator.pushReplacementNamed(
-          context,
-          '/voicewelcome',
-        ); // Navigate back to welcome page
+        Navigator.pushReplacementNamed(context, '/voicewelcome'); // Navigate back to welcome page
       }
     });
   }
 
   Future<void> _handleLoginError(String errorMessage) async {
-    await SmartSaccoAudioManager().speakIfActive('voiceLogin', errorMessage);
-
+    await flutterTts.speak(errorMessage);
+    
     Future.delayed(Duration(seconds: 4), () {
       if (mounted) {
         _askForPinAgain("Please say your 4-digit PIN again.");
@@ -349,27 +310,9 @@ class _VoiceLoginPageState extends State<VoiceLoginPage>
     });
   }
 
-  void _repeatPinEntry() {
-    SmartSaccoAudioManager().speakIfActive(
-      'voiceLogin',
-      "Repeating PIN entry. Please say your 4-digit PIN one digit at a time.",
-    );
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) {
-        _startListening();
-      }
-    });
-  }
-
-  void _speakHelp() {
-    SmartSaccoAudioManager().speakIfActive(
-      'voiceLogin',
-      "Voice login help. Say your 4-digit PIN one digit at a time. For example, say 'one two three four' for PIN 1234. Say 'repeat' to hear the instructions again, or 'help' for this message.",
-    );
-  }
-
   void _askForPinAgain(String message) {
-    SmartSaccoAudioManager().speakIfActive('voiceLogin', message);
+    flutterTts.speak(message);
+    
     Future.delayed(Duration(seconds: message.length ~/ 10 + 2), () {
       if (mounted) {
         _startListening();
@@ -377,18 +320,18 @@ class _VoiceLoginPageState extends State<VoiceLoginPage>
     });
   }
 
-  Future<void> _showError(String message) async {
-    await SmartSaccoAudioManager().speakIfActive('voiceLogin', message);
+  void _showError(String message) {
+    flutterTts.speak(message);
     Future.delayed(Duration(seconds: message.length ~/ 10 + 2), () {
       if (mounted) {
-        _startListening();
+        _speakWelcomeMessage();
       }
     });
   }
 
   String _getCurrentStatusText() {
     if (isLoggingIn) {
-      return "Verifying Login";
+      return "Verifying PIN...";
     } else if (isListening) {
       return "Say each digit one by one...";
     } else {
@@ -402,7 +345,6 @@ class _VoiceLoginPageState extends State<VoiceLoginPage>
     _pulseController.dispose();
     flutterTts.stop();
     speech.stop();
-    SmartSaccoAudioManager().unregisterScreen('voiceLogin');
     super.dispose();
   }
 
@@ -430,17 +372,11 @@ class _VoiceLoginPageState extends State<VoiceLoginPage>
                 width: 100,
                 height: 100,
                 decoration: BoxDecoration(
-                  color: isLoggingIn
-                      ? Colors.orange.shade600
-                      : Colors.blue.shade600,
+                  color: isLoggingIn ? Colors.orange.shade600 : Colors.blue.shade600,
                   shape: BoxShape.circle,
                   boxShadow: [
                     BoxShadow(
-                      color:
-                          (isLoggingIn
-                                  ? Colors.orange.shade300
-                                  : Colors.blue.shade300)
-                              .withOpacity(0.5),
+                      color: (isLoggingIn ? Colors.orange.shade300 : Colors.blue.shade300).withOpacity(0.5),
                       spreadRadius: 5,
                       blurRadius: 15,
                       offset: Offset(0, 3),
@@ -491,74 +427,164 @@ class _VoiceLoginPageState extends State<VoiceLoginPage>
                     ),
                   ],
                 ),
-                child: Column(
-                  children: [
-                    Text(
-                      _getCurrentStatusText(),
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.blue.shade800,
-                      ),
+                child: Text(
+                  _getCurrentStatusText(),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 18,
+                    color: Colors.blue.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+
+            SizedBox(height: 40),
+
+            // Listening indicator or loading
+            if (isLoggingIn)
+              Column(
+                children: [
+                  CircularProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.blue.shade600),
+                  ),
+                  SizedBox(height: 15),
+                  Text(
+                    'Checking your credentials...',
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.blue.shade700,
+                      fontWeight: FontWeight.w500,
                     ),
-                    if (spokenText.isNotEmpty) ...[
-                      SizedBox(height: 15),
-                      Container(
-                        padding: EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: Colors.blue.shade50,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(
-                          "Heard: \"$spokenText\"",
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontStyle: FontStyle.italic,
-                            color: Colors.blue.shade700,
+                  ),
+                ],
+              )
+            else if (isListening)
+              Column(
+                children: [
+                  AnimatedBuilder(
+                    animation: _pulseAnimation,
+                    builder: (context, child) {
+                      return Transform.scale(
+                        scale: _pulseAnimation.value,
+                        child: Container(
+                          width: 80,
+                          height: 80,
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade100,
+                            shape: BoxShape.circle,
                           ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ],
-                    if (enteredPin.isNotEmpty) ...[
-                      SizedBox(height: 15),
-                      Container(
-                        padding: EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: Colors.green.shade50,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(
-                          "PIN: ${enteredPin.split('').join(' ')}",
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.green.shade700,
+                          child: Icon(
+                            Icons.mic,
+                            size: 40,
+                            color: Colors.red.shade600,
                           ),
-                          textAlign: TextAlign.center,
                         ),
-                      ),
-                    ],
-                  ],
+                      );
+                    },
+                  ),
+                  SizedBox(height: 15),
+                  Text(
+                    'Listening... Say your PIN',
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.blue.shade700,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              )
+            else
+              Column(
+                children: [
+                  Icon(
+                    Icons.voice_chat,
+                    size: 40,
+                    color: Colors.blue.shade600,
+                  ),
+                  SizedBox(height: 15),
+                  Text(
+                    'Ready to listen',
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.blue.shade700,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+
+            SizedBox(height: 40),
+
+            // Attempts indicator
+            if (loginAttempts > 0 && loginAttempts < maxAttempts)
+              Container(
+                padding: EdgeInsets.all(15),
+                margin: EdgeInsets.symmetric(horizontal: 20),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.orange.shade200),
+                ),
+                child: Text(
+                  'Attempt ${loginAttempts} of ${maxAttempts}',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.orange.shade800,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
-            ),
 
-            SizedBox(height: 30),
+            SizedBox(height: 20),
 
-            // Help button
-            FadeTransition(
-              opacity: _fadeAnimation,
-              child: TextButton.icon(
-                onPressed: _speakHelp,
-                icon: Icon(Icons.help, color: Colors.blue.shade600),
-                label: Text(
-                  "Voice Help",
-                  style: TextStyle(color: Colors.blue.shade600),
+            // PIN display (for debugging - remove in production)
+            if (enteredPin.isNotEmpty)
+              Container(
+                padding: EdgeInsets.all(15),
+                margin: EdgeInsets.symmetric(horizontal: 20),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.blue.shade200),
+                ),
+                child: Text(
+                  'PIN Entered: $enteredPin',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.blue.shade800,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
-            ),
+
+            SizedBox(height: 40),
+
+            // Back button
+            if (!isLoggingIn && !isListening)
+              FadeTransition(
+                opacity: _fadeAnimation,
+                child: TextButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                  },
+                  style: TextButton.styleFrom(
+                    padding: EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+                    backgroundColor: Colors.blue.shade100,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  child: Text(
+                    'Back to Welcome',
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.blue.shade800,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
