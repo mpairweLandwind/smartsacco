@@ -1,7 +1,9 @@
 // ignore_for_file: library_private_types_in_public_api, deprecated_member_use
 
 import 'package:flutter/material.dart';
-import 'package:smartsacco/services/enhanced_voice_service.dart';
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:permission_handler/permission_handler.dart';
 import 'package:logging/logging.dart';
 
 class SplashPage extends StatefulWidget {
@@ -12,29 +14,27 @@ class SplashPage extends StatefulWidget {
 }
 
 class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
-  final EnhancedVoiceService _voiceService = EnhancedVoiceService();
-  final Logger _logger = Logger('SplashPage');
-
-  // Animation controllers
+  FlutterTts flutterTts = FlutterTts();
+  stt.SpeechToText speech = stt.SpeechToText();
+  bool isListening = false;
+  bool isSpeaking = false;
+  String spokenText = "";
+  int retryCount = 0;
+  final int maxRetries = 3;
   late AnimationController _fadeController;
   late AnimationController _scaleController;
   late AnimationController _pulseController;
   late Animation<double> _fadeAnimation;
   late Animation<double> _scaleAnimation;
   late Animation<double> _pulseAnimation;
-
-  // Voice state
-  bool isListening = false;
-  bool isSpeaking = false;
-  String spokenText = "";
-  int retryCount = 0;
-  final int maxRetries = 3;
+  final Logger _logger = Logger('SplashPage');
 
   @override
   void initState() {
     super.initState();
     _initAnimations();
-    _initializeVoiceService();
+    _initTTS();
+    _requestPermissions();
     _startWelcomeSequence();
   }
 
@@ -66,75 +66,32 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
     );
   }
 
-  Future<void> _initializeVoiceService() async {
-    try {
-      await _voiceService.initialize(
-        onSpeechResult: _handleSpeechResult,
-        onSpeechError: _handleSpeechError,
-        onListeningStateChanged: _handleListeningStateChanged,
-        onSpeakingStateChanged: _handleSpeakingStateChanged,
-      );
-      _logger.info('Enhanced voice service initialized successfully');
-    } catch (e) {
-      _logger.severe('Failed to initialize voice service: $e');
+  Future<void> _initTTS() async {
+    await flutterTts.setLanguage("en-US");
+    await flutterTts.setSpeechRate(0.5);
+    await flutterTts.setVolume(1.0);
+    await flutterTts.setPitch(1.0);
+
+    // Set up TTS completion handler
+    flutterTts.setCompletionHandler(() {
+      if (mounted) {
+        setState(() {
+          isSpeaking = false;
+        });
+        // Start listening after TTS finishes
+        if (!isListening) {
+          _startListening();
+        }
+      }
+    });
+  }
+
+  Future<void> _requestPermissions() async {
+    var status = await Permission.microphone.request();
+    if (status != PermissionStatus.granted) {
       _showError(
-        "Voice service initialization failed. Please tap to continue.",
+        "Microphone permission is required for voice navigation. Please tap to continue.",
       );
-    }
-  }
-
-  void _handleSpeechResult(String text) {
-    if (mounted) {
-      setState(() {
-        spokenText = text.toLowerCase();
-      });
-
-      _logger.info('Recognized: $spokenText');
-
-      // Enhanced trigger word detection with accent variations
-      List<String> triggerWords = [
-        'one',
-        '1',
-        'won',
-        'wan',
-        'wun',
-        'first',
-        'start',
-      ];
-      bool hasTriggerWord = triggerWords.any(
-        (word) => spokenText.contains(word),
-      );
-
-      if (hasTriggerWord) {
-        _handleVoiceNavigation();
-      }
-    }
-  }
-
-  void _handleSpeechError(String error) {
-    _logger.warning('Speech error: $error');
-    _handleSpeechErrorInternal(error);
-  }
-
-  void _handleListeningStateChanged(bool listening) {
-    if (mounted) {
-      setState(() {
-        isListening = listening;
-      });
-
-      if (listening) {
-        _pulseController.repeat(reverse: true);
-      } else {
-        _pulseController.stop();
-      }
-    }
-  }
-
-  void _handleSpeakingStateChanged(bool speaking) {
-    if (mounted) {
-      setState(() {
-        isSpeaking = speaking;
-      });
     }
   }
 
@@ -153,22 +110,80 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
     String welcomeMessage =
         "Welcome to SmartSacco application. If you are visually impaired, say 'one' to continue with voice navigation, or tap anywhere on the screen to proceed normally.";
 
-    await _voiceService.speak(welcomeMessage);
+    setState(() {
+      isSpeaking = true;
+    });
 
-    // Start listening after speaking
-    await Future.delayed(Duration(seconds: 1));
-    await _startListening();
+    await flutterTts.speak(welcomeMessage);
   }
 
   Future<void> _startListening() async {
-    try {
-      await _voiceService.startListening(
-        triggerWords: ['one', '1', 'won', 'wan', 'wun', 'first', 'start'],
-        listenFor: Duration(seconds: 10), // Reduced from 15 to 10
-        pauseFor: Duration(seconds: 3), // Reduced from 5 to 3
+    // Stop any existing listening session
+    if (isListening) {
+      await speech.stop();
+    }
+
+    bool available = await speech.initialize(
+      onStatus: (val) {
+        _logger.info('Speech status: $val'); // Debug log
+        if (mounted) {
+          setState(() {
+            isListening = val == 'listening';
+          });
+
+          // Handle different status scenarios
+          if (val == 'done' || val == 'notListening') {
+            _handleListeningComplete();
+          }
+        }
+      },
+      onError: (val) {
+        _logger.warning('Speech error: $val'); // Debug log
+        if (mounted) {
+          setState(() {
+            isListening = false;
+          });
+          _handleSpeechError(val.errorMsg);
+        }
+      },
+    );
+
+    if (available) {
+      if (mounted) {
+        setState(() {
+          isListening = true;
+          spokenText = "";
+        });
+
+        // Start pulse animation for microphone
+        _pulseController.repeat(reverse: true);
+      }
+
+      await speech.listen(
+        onResult: (val) {
+          if (mounted) {
+            setState(() {
+              spokenText = val.recognizedWords.toLowerCase();
+            });
+
+            _logger.info('Recognized: $spokenText'); // Debug log
+
+            // Check for trigger words
+            if (spokenText.contains('one') ||
+                spokenText.contains('1') ||
+                spokenText.contains('won')) {
+              _handleVoiceNavigation();
+            }
+          }
+        },
+        listenFor: Duration(seconds: 15), // Increased listening time
+        pauseFor: Duration(seconds: 5), // Increased pause time
+        partialResults: true, // Enable partial results
+        cancelOnError: false, // Don't cancel on minor errors
+        listenMode:
+            stt.ListenMode.confirmation, // Better for command recognition
       );
-    } catch (e) {
-      _logger.severe('Failed to start listening: $e');
+    } else {
       _showError("Speech recognition not available. Please tap to continue.");
     }
   }
@@ -177,18 +192,10 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
     _pulseController.stop();
 
     // If we haven't detected the trigger word and haven't exceeded retries
-    List<String> triggerWords = [
-      'one',
-      '1',
-      'won',
-      'wan',
-      'wun',
-      'first',
-      'start',
-    ];
-    bool hasTriggerWord = triggerWords.any((word) => spokenText.contains(word));
-
-    if (!hasTriggerWord && retryCount < maxRetries) {
+    if (!spokenText.contains('one') &&
+        !spokenText.contains('1') &&
+        !spokenText.contains('won') &&
+        retryCount < maxRetries) {
       retryCount++;
 
       String retryMessage = retryCount == 1
@@ -205,10 +212,10 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
     }
   }
 
-  void _handleSpeechErrorInternal(String errorMsg) {
+  void _handleSpeechError(String errorMsg) {
     _pulseController.stop();
 
-    _logger.warning('Speech error details: $errorMsg');
+    _logger.warning('Speech error details: $errorMsg'); // Debug log
 
     // Handle specific error types
     if (errorMsg.contains('network') || errorMsg.contains('connection')) {
@@ -216,19 +223,10 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
         "Network issue detected. Please check your connection and try saying 'one' again.",
       );
     } else if (errorMsg.contains('no-speech') ||
-        errorMsg.contains('speech-timeout') ||
-        errorMsg.contains('error_speech_timeout')) {
-      // Handle speech timeout more gracefully
-      if (retryCount < maxRetries) {
-        retryCount++;
-        _speakAndRetry(
-          "I didn't hear anything. Please say 'one' clearly to continue with voice navigation.",
-        );
-      } else {
-        _speakAndRetry(
-          "Voice recognition is having trouble. You can tap the screen to continue normally.",
-        );
-      }
+        errorMsg.contains('speech-timeout')) {
+      _speakAndRetry(
+        "I didn't hear anything. Please say 'one' to continue with voice navigation.",
+      );
     } else if (retryCount < maxRetries) {
       retryCount++;
       _speakAndRetry(
@@ -242,33 +240,43 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
   }
 
   Future<void> _speakAndRetry(String message) async {
-    await _voiceService.speak(message);
+    setState(() {
+      isSpeaking = true;
+    });
 
-    // Start listening again after speaking with a longer delay for better stability
-    await Future.delayed(Duration(seconds: 3));
-    await _startListening();
+    await flutterTts.speak(message);
+    // TTS completion handler will trigger _startListening()
   }
 
   void _handleVoiceNavigation() async {
-    await _voiceService.stopListening();
-    await _voiceService.speak("Navigating you to the welcome screen.");
+    if (mounted) {
+      setState(() {
+        isListening = false;
+      });
+    }
 
-    // Navigate after speaking
-    await Future.delayed(Duration(seconds: 2));
-    _navigateToMainApp(accessibilityMode: true);
+    _pulseController.stop();
+    speech.stop();
+
+    setState(() {
+      isSpeaking = true;
+    });
+
+    flutterTts.setCompletionHandler(() {
+      if (mounted) {
+        setState(() {
+          isSpeaking = false;
+        });
+        _navigateToMainApp(accessibilityMode: true);
+      }
+    });
+    await flutterTts.speak("Navigating you to the welcome screen.");
   }
 
   void _navigateToMainApp({bool accessibilityMode = false}) {
     // Stop all audio activities
-    _voiceService.stopListening();
-    _voiceService.stopSpeaking();
-
-    // Show a brief message before navigating
-    if (accessibilityMode) {
-      _voiceService.speak("Taking you to voice navigation.");
-    } else {
-      _voiceService.speak("Taking you to the main app.");
-    }
+    speech.stop();
+    flutterTts.stop();
 
     Future.delayed(Duration(seconds: 2), () {
       if (mounted) {
@@ -282,17 +290,10 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
   }
 
   void _showError(String message) {
-    _voiceService.speak(message);
+    flutterTts.speak(message);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: Duration(seconds: 3),
-          action: SnackBarAction(
-            label: 'Skip Voice',
-            onPressed: () => _navigateToMainApp(),
-          ),
-        ),
+        SnackBar(content: Text(message), duration: Duration(seconds: 3)),
       );
     }
   }
@@ -302,7 +303,8 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
     _fadeController.dispose();
     _scaleController.dispose();
     _pulseController.dispose();
-    _voiceService.dispose();
+    flutterTts.stop();
+    speech.stop();
     super.dispose();
   }
 
@@ -334,10 +336,10 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
                     child: FadeTransition(
                       opacity: _fadeAnimation,
                       child: Container(
-                        width: 150,
-                        height: 150,
+                        width: 120,
+                        height: 120,
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: Colors.blue.shade600,
                           shape: BoxShape.circle,
                           boxShadow: [
                             BoxShadow(
@@ -351,22 +353,21 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
                         child: ClipOval(
                           child: Image.asset(
                             'assets/smartsacco.png',
-                            width: 140,
-                            height: 140,
+                            width: 110,
+                            height: 110,
                             fit: BoxFit.cover,
                             errorBuilder: (context, error, stackTrace) {
-                              // Fallback to icon if image fails to load
                               return Container(
-                                width: 140,
-                                height: 140,
+                                width: 110,
+                                height: 110,
                                 decoration: BoxDecoration(
-                                  color: Colors.blue.shade600,
+                                  color: Colors.white,
                                   shape: BoxShape.circle,
                                 ),
                                 child: Icon(
                                   Icons.account_balance,
-                                  size: 60,
-                                  color: Colors.white,
+                                  size: 55,
+                                  color: Colors.blue.shade600,
                                 ),
                               );
                             },
@@ -462,18 +463,52 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
                   ],
                 ),
 
-              // Voice configuration indicator
-              if (!isListening && !isSpeaking)
-                Padding(
-                  padding: const EdgeInsets.only(top: 20.0),
-                  child: Text(
-                    'Enhanced voice recognition active',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.blue.shade400,
-                      fontStyle: FontStyle.italic,
+              if (isSpeaking && !isListening)
+                Column(
+                  children: [
+                    Container(
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade100,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.volume_up,
+                        size: 40,
+                        color: Colors.green.shade600,
+                      ),
                     ),
-                  ),
+                    SizedBox(height: 15),
+                    Text(
+                      'Speaking...',
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: Colors.blue.shade700,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+
+              if (!isListening && !isSpeaking)
+                Column(
+                  children: [
+                    Icon(
+                      Icons.touch_app,
+                      size: 40,
+                      color: Colors.blue.shade600,
+                    ),
+                    SizedBox(height: 15),
+                    Text(
+                      'Tap anywhere to continue',
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: Colors.blue.shade700,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
                 ),
             ],
           ),

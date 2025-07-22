@@ -49,7 +49,7 @@ class PaymentService {
             'amount': amount,
             'type': 'Deposit',
             'method': 'MTN MoMo',
-            'status': 'Pending',
+            'status': 'success',
             'date': FieldValue.serverTimestamp(),
             'phoneNumber': formattedPhone,
             'externalId': externalId,

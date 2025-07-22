@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_firestore/cloud_firestore.dart' as firestore;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
@@ -11,6 +11,7 @@ import 'package:smartsacco/models/momopayment.dart';
 import 'package:smartsacco/pages/login.dart';
 import 'package:smartsacco/pages/feedback.dart';
 import 'package:smartsacco/models/notification.dart';
+import 'package:smartsacco/models/transactionmodel.dart';
 
 class SavingsHistory {
   final double amount;
@@ -50,8 +51,6 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
   String _lastWords = '';
   bool _isProcessing = false;
   bool _isSpeaking = false;
-  String _enteredPin = '';
-  bool _waitingForPin = false;
 
   int _currentIndex = 0;
   int _unreadNotifications = 0;
@@ -103,6 +102,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
       print('Speech recognition initialized: $_speechEnabled');
     } catch (e) {
       print('Error initializing speech recognition: $e');
+    
       _speechEnabled = false;
     }
     setState(() {});
@@ -167,7 +167,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
       "Option 3: Check your total savings. "
       "Option 4: Check active loans and their cost. "
       "Option 5: Check your amount due. "
-      "Option 6: Make a deposit or save money. "
+      "Option 6: Make a deposit - just say the amount and confirm. "
       "Option 7: Logout. "
       "Option 8: Repeat these options. "
       "Which option would you like to choose? Please say the number.",
@@ -181,7 +181,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
         "Option 3: Check savings. "
         "Option 4: Check loans. "
         "Option 5: Check amount due. "
-        "Option 6: Make deposit. "
+        "Option 6: Make deposit - just say amount and confirm. "
         "Option 7: Logout. "
         "Option 8: Repeat options. "
         "Which option would you like?",
@@ -292,11 +292,6 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
     command = command.trim();
     print('Processing command: $command');
 
-    if (_waitingForPin) {
-      _handlePinInput(command);
-      return;
-    }
-
     if (_waitingForConfirmation) {
       _handleConfirmationResponse(command);
       return;
@@ -308,33 +303,21 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
       return;
     }
 
-    // Handle quick deposit option
-    if (command.contains('quick deposit') || 
-        command.contains('quick save') ||
-        command.contains('fast deposit') ||
-        command.contains('fast save')) {
-      _handleQuickDeposit();
+    // Check if this is a menu return response
+    if (command.contains('yes') || command.contains('menu')) {
+      _returnToMainMenu();
       return;
     }
 
-    // Handle main menu options with enhanced deposit triggers
+    // Main menu options
     if (command.contains('3') || command.contains('three')) {
       _confirmChoice("3", "check your total savings");
-    } else if (command.contains('4') || command.contains('four')) {
-      _confirmChoice("4", "check active loans and their cost");
+    } else if (command.contains('2') || command.contains('four')) {
+      _confirmChoice("4", "check your active loans");
     } else if (command.contains('5') || command.contains('five')) {
       _confirmChoice("5", "check your amount due");
-    } else if (command.contains('6') || 
-               command.contains('six') ||
-               command.contains('deposit') ||
-               command.contains('save') ||
-               command.contains('saving') ||
-               command.contains('money') ||
-               command.contains('add money') ||
-               command.contains('put money') ||
-               command.contains('contribute') ||
-               command.contains('investment')) {
-      _confirmChoice("6", "make a deposit or save money");
+    } else if (command.contains('6') || command.contains('six')) {
+      _confirmChoice("6", "make a deposit");
     } else if (command.contains('7') || command.contains('seven')) {
       _confirmChoice("7", "logout");
     } else if (command.contains('8') ||
@@ -347,7 +330,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
         "Option 3: Check savings. "
         "Option 4: Check loans. "
         "Option 5: Check amount due. "
-        "Option 6: Make deposit. "
+        "Option 6: Make deposit - just say amount and confirm. "
         "Option 7: Logout. "
         "Option 8: Repeat options. "
         "Which option?",
@@ -355,46 +338,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
     }
   }
 
-  void _handlePinInput(String command) {
-    final cleanedPin = command.replaceAll(RegExp(r'[^0-9]'), '');
-
-    if (cleanedPin.length == 4) {
-      _verifyPinAndDeposit(cleanedPin);
-    } else {
-      _speakAndWaitForResponse(
-        "I didn’t catch a valid 4-digit PIN. Please try again.",
-      );
-    }
-  }
-
-  Future<void> _verifyPinAndDeposit(String pin) async {
-    _waitingForPin = false;
-
-    try {
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(memberId)
-          .get();
-
-      final storedPin = doc['pin'] ?? '';
-
-      if (storedPin == pin) {
-        _processDeposit(_pendingAmount, 'Voice PIN');
-        _speakAndWaitForResponse(
-          "Deposit successful. Your new balance is ${_formatCurrencyForSpeech(_currentSavings + _pendingAmount)} Uganda Shillings. Say yes to return to the main menu.",
-        );
-        _resetVoiceState();
-      } else {
-        _speakAndWaitForResponse(
-          "Incorrect PIN. Please say your 4-digit PIN again.",
-        );
-        _waitingForPin = true;
-      }
-    } catch (e) {
-      print("PIN verification error: $e");
-      _speakAndWaitForResponse("Error verifying PIN. Please try again.");
-    }
-  }
+  // PIN methods removed - deposits now processed directly without PIN verification
 
   void _repeatOptions() {
     _speakAndWaitForResponse(
@@ -402,7 +346,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
       "Option 3: Check your total savings. "
       "Option 4: Check active loans and their cost. "
       "Option 5: Check your amount due. "
-      "Option 6: Make a deposit. "
+      "Option 6: Make a deposit - just say the amount and confirm. "
       "Option 7: Logout. "
       "Option 8: Repeat these options. "
       "Which option would you like to choose?",
@@ -538,27 +482,12 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
     setState(() {
       _currentVoiceAction = VoiceAction.deposit;
     });
-    
-    _speakAndWaitForResponse(
-      "To make a deposit or save money, please tell me the amount you want to deposit. "
-      "You can say the amount in different ways. For example: "
-      "'fifty thousand' for 50,000 Uganda Shillings, "
-      "'one hundred thousand' for 100,000 Uganda Shillings, "
-      "'two hundred fifty thousand' for 250,000 Uganda Shillings. "
-      "You can also say 'quick deposit' for common amounts like 10,000, 25,000, 50,000, or 100,000 shillings. "
-      "What amount would you like to deposit or save?",
-    );
-  }
 
-  void _handleQuickDeposit() {
     _speakAndWaitForResponse(
-      "Quick deposit options: "
-      "Say 'ten thousand' for 10,000 shillings, "
-      "'twenty five thousand' for 25,000 shillings, "
-      "'fifty thousand' for 50,000 shillings, "
-      "'one hundred thousand' for 100,000 shillings, "
-      "or say any other amount you prefer. "
-      "What amount would you like?",
+      "To make a deposit, please tell me the amount you want to deposit. "
+      "For example, say 'fifty thousand' for 50,000 Uganda Shillings. "
+      "After you say the amount, I'll ask you to confirm once, then process the deposit immediately. "
+      "What amount would you like to deposit?",
     );
   }
 
@@ -567,14 +496,11 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
 
     if (amount <= 0) {
       String actionType = _currentVoiceAction == VoiceAction.deposit
-          ? "deposit or save"
+          ? "deposit"
           : "withdraw";
       _speakAndWaitForResponse(
         "I couldn't understand the amount. Please say the amount clearly. "
-        "You can say: 'ten thousand' for 10,000 shillings, "
-        "'fifty thousand' for 50,000 shillings, "
-        "'one hundred thousand' for 100,000 shillings, "
-        "'two hundred fifty thousand' for 250,000 shillings. "
+        "For example, say 'ten thousand' for 10,000 shillings. "
         "How much would you like to $actionType?",
       );
       return;
@@ -586,7 +512,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
     });
 
     String actionType = _currentVoiceAction == VoiceAction.deposit
-        ? "deposit or save"
+        ? "deposit"
         : "withdraw";
     _speakAndWaitForResponse(
       "You want to $actionType ${_formatCurrencyForSpeech(amount)} Uganda Shillings. "
@@ -611,18 +537,16 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
         _logout();
         break;
       case VoiceAction.deposit:
-        // Request the PIN instead of processing payment
-        _waitingForPin = true;
+        // Directly process the deposit
+        _processDeposit(_pendingAmount, 'Voice Deposit');
         _speakAndWaitForResponse(
-          "Please say your 4-digit PIN to confirm the deposit.",
+          "Deposit successful. Your new balance is ${_formatCurrencyForSpeech(_currentSavings + _pendingAmount)} Uganda Shillings. "
+          "Would you like to hear the main menu? Say yes for menu.",
         );
+        _resetVoiceState();
         break;
       default:
         _returnToMainMenu();
-    }
-
-    if (_currentVoiceAction != VoiceAction.deposit) {
-      _resetVoiceState();
     }
   }
 
@@ -652,7 +576,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
       "Option 3: Check savings. "
       "Option 4: Check loans. "
       "Option 5: Check amount due. "
-      "Option 6: Make deposit. "
+      "Option 6: Make deposit - just say amount and confirm. "
       "Option 7: Logout. "
       "Option 8: Repeat options. "
       "Which option would you like?",
@@ -670,103 +594,30 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
   }
 
   double _parseSpokenAmount(String spokenAmount) {
-    // Enhanced number parsing with more flexible formats
-    String processedAmount = spokenAmount.toLowerCase().trim();
-
-    // Remove common filler words
-    processedAmount = processedAmount
-        .replaceAll('shillings', '')
-        .replaceAll('shilling', '')
-        .replaceAll('uganda', '')
-        .replaceAll('ugandan', '')
-        .replaceAll('amount', '')
-        .replaceAll('of', '')
-        .replaceAll('the', '')
-        .replaceAll('please', '')
-        .replaceAll('want', '')
-        .replaceAll('to', '')
-        .replaceAll('deposit', '')
-        .replaceAll('save', '')
-        .replaceAll('saving', '')
-        .replaceAll('money', '')
-        .replaceAll('add', '')
-        .replaceAll('put', '')
-        .replaceAll('contribute', '')
-        .replaceAll('investment', '')
-        .trim();
-
-    // Handle different number formats
-    processedAmount = processedAmount
+    // Enhanced number parsing
+    spokenAmount = spokenAmount
+        .toLowerCase()
         .replaceAll(' ', '')
         .replaceAll('thousand', '000')
-        .replaceAll('k', '000')
         .replaceAll('million', '000000')
-        .replaceAll('m', '000000')
         .replaceAll('hundred', '00')
-        .replaceAll('hundreds', '00')
-        .replaceAll('hundredth', '00');
+        .replaceAll('fifty', '50')
+        .replaceAll('forty', '40')
+        .replaceAll('thirty', '30')
+        .replaceAll('twenty', '20')
+        .replaceAll('ten', '10')
+        .replaceAll('nine', '9')
+        .replaceAll('eight', '8')
+        .replaceAll('seven', '7')
+        .replaceAll('six', '6')
+        .replaceAll('five', '5')
+        .replaceAll('four', '4')
+        .replaceAll('three', '3')
+        .replaceAll('two', '2')
+        .replaceAll('one', '1')
+        .replaceAll(RegExp(r'[^0-9]'), '');
 
-    // Handle number words
-    Map<String, String> numberWords = {
-      'zero': '0',
-      'one': '1',
-      'two': '2',
-      'three': '3',
-      'four': '4',
-      'five': '5',
-      'six': '6',
-      'seven': '7',
-      'eight': '8',
-      'nine': '9',
-      'ten': '10',
-      'eleven': '11',
-      'twelve': '12',
-      'thirteen': '13',
-      'fourteen': '14',
-      'fifteen': '15',
-      'sixteen': '16',
-      'seventeen': '17',
-      'eighteen': '18',
-      'nineteen': '19',
-      'twenty': '20',
-      'thirty': '30',
-      'forty': '40',
-      'fifty': '50',
-      'sixty': '60',
-      'seventy': '70',
-      'eighty': '80',
-      'ninety': '90',
-    };
-
-    numberWords.forEach((word, digit) {
-      processedAmount = processedAmount.replaceAll(word, digit);
-    });
-
-    // Handle compound numbers like "twenty five thousand"
-    processedAmount = processedAmount
-        .replaceAll('twentyfive', '25')
-        .replaceAll('twentyfour', '24')
-        .replaceAll('twentythree', '23')
-        .replaceAll('twentytwo', '22')
-        .replaceAll('twentyone', '21')
-        .replaceAll('fifteen', '15')
-        .replaceAll('fourteen', '14')
-        .replaceAll('thirteen', '13')
-        .replaceAll('twelve', '12')
-        .replaceAll('eleven', '11');
-
-    // Remove any remaining non-numeric characters
-    processedAmount = processedAmount.replaceAll(RegExp(r'[^0-9]'), '');
-
-    // Parse the final number
-    double result = double.tryParse(processedAmount) ?? 0;
-
-    // Log for debugging
-    print(
-      'Original: "$spokenAmount" -> Processed: "$processedAmount" -> Result: $result',
-    );
-
-    return result;
+    return double.tryParse(spokenAmount) ?? 0;
   }
 
   void _processVoiceDeposit(double amount) {
@@ -784,14 +635,12 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
             if (success) {
               _processDeposit(amount, 'Mobile Money');
               _speakAndWaitForResponse(
-                "Excellent! Your deposit of ${_formatCurrencyForSpeech(amount)} Uganda Shillings was successful. "
-                "Your new balance is ${_formatCurrencyForSpeech(_currentSavings + amount)} Uganda Shillings. "
-                "Thank you for saving with SmartSacco. "
+                "Deposit successful. Your new balance is ${_formatCurrencyForSpeech(_currentSavings + amount)} Uganda Shillings. "
                 "Would you like to hear the main menu? Say yes for menu.",
               );
             } else {
               _speakAndWaitForResponse(
-                "Deposit was not completed. Please try again or contact support. "
+                "Deposit failed. Please try again. "
                 "Would you like to hear the main menu? Say yes for menu.",
               );
             }
@@ -799,15 +648,6 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
           },
         ),
       ),
-    );
-  }
-
-  void _speakDepositSuccess(double amount) {
-    _speakAndWaitForResponse(
-      "Congratulations! Your deposit of ${_formatCurrencyForSpeech(amount)} Uganda Shillings was successful. "
-      "Your new balance is ${_formatCurrencyForSpeech(_currentSavings + amount)} Uganda Shillings. "
-      "Your money is safe with SmartSacco. "
-      "Would you like to make another deposit or return to the main menu? Say 'menu' for main menu or 'deposit' for another deposit.",
     );
   }
 
@@ -822,7 +662,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
     if (user != null) {
       memberId = user.uid;
 
-      final memberDoc = await FirebaseFirestore.instance
+      final memberDoc = await firestore.FirebaseFirestore.instance
           .collection('users')
           .doc(memberId)
           .get();
@@ -835,11 +675,66 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
       _fetchSavingsData();
       _fetchLoansData();
       _fetchNotifications();
+      _fetchTransactionHistory();
+    }
+  }
+
+  Future<void> _fetchTransactionHistory() async {
+    try {
+      print('🔄 Fetching transaction history for member: $memberId');
+
+      final transactionsSnapshot = await firestore.FirebaseFirestore.instance
+          .collection('users')
+          .doc(memberId)
+          .collection('transactions')
+          .orderBy('date', descending: true)
+          .limit(50)
+          .get();
+
+      List<Transaction> transactions = [];
+
+      for (var doc in transactionsSnapshot.docs) {
+        final data = doc.data();
+
+        // Validate transaction data
+        if (data['amount'] != null && data['date'] != null) {
+          transactions.add(
+            Transaction(
+              id: doc.id,
+              amount: data['amount']?.toDouble() ?? 0,
+              type: data['type'] ?? 'Unknown',
+              date: data['date']?.toDate() ?? DateTime.now(),
+              status: data['status'] ?? 'Pending',
+              method: data['method'] ?? 'Unknown',
+              reference: data['reference'],
+              phoneNumber: data['phoneNumber'],
+            ),
+          );
+        } else {
+          print('⚠️ Skipping invalid transaction: ${doc.id}');
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _transactions.clear();
+          _transactions.addAll(transactions);
+        });
+      }
+
+      print('✅ Transaction history fetched:');
+      print('   - Total transactions: ${transactions.length}');
+      print(
+        '   - Recent transactions: ${transactions.take(5).map((t) => '${t.type}: ${_formatCurrency(t.amount)}').join(', ')}',
+      );
+    } catch (e) {
+      print('❌ Error fetching transaction history: $e');
+      debugPrint('Error fetching transaction history: $e');
     }
   }
 
   Future<void> _fetchSavingsData() async {
-    final savingsSnapshot = await FirebaseFirestore.instance
+    final savingsSnapshot = await firestore.FirebaseFirestore.instance
         .collection('users')
         .doc(memberId)
         .collection('savings')
@@ -857,7 +752,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
           amount: amount,
           date: doc['date'].toDate(),
           type: doc['type'] ?? 'Deposit',
-          transactionId: doc.id,
+          transactionId: doc['transactionId'] ?? '',
         ),
       );
     }
@@ -869,7 +764,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
   }
 
   Future<void> _fetchLoansData() async {
-    final loansSnapshot = await FirebaseFirestore.instance
+    final loansSnapshot = await firestore.FirebaseFirestore.instance
         .collection('users')
         .doc(memberId)
         .collection('loans')
@@ -879,7 +774,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
     List<Loan> loans = [];
 
     for (var doc in loansSnapshot.docs) {
-      final payments = await FirebaseFirestore.instance
+      final payments = await firestore.FirebaseFirestore.instance
           .collection('users')
           .doc(memberId)
           .collection('loans')
@@ -907,7 +802,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
                   reference: p['reference'] ?? '',
                 ),
               )
-              .toList(),
+              .toList(), monthlyPayment: 0,
         ),
       );
     }
@@ -918,7 +813,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
   }
 
   Future<void> _fetchNotifications() async {
-    final notificationsSnapshot = await FirebaseFirestore.instance
+    final notificationsSnapshot = await firestore.FirebaseFirestore.instance
         .collection('users')
         .doc(memberId)
         .collection('notifications')
@@ -954,35 +849,91 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
 
   Future<void> _processDeposit(double amount, String method) async {
     try {
-      await FirebaseFirestore.instance
+      print('🔄 Processing deposit: $amount via $method');
+      print('👤 User ID: $memberId');
+      print('💰 Current balance before deposit: ${_formatCurrency(_currentSavings)}');
+
+      // Generate unique transaction ID
+      final transactionId = DateTime.now().millisecondsSinceEpoch.toString();
+      print('📝 Transaction ID: $transactionId');
+
+      // Start transaction batch for atomic operations
+      final batch = firestore.FirebaseFirestore.instance.batch();
+
+      // Add to savings collection
+      final savingsRef = firestore.FirebaseFirestore.instance
           .collection('users')
           .doc(memberId)
           .collection('savings')
-          .add({
-            'amount': amount,
-            'date': DateTime.now(),
-            'type': 'Deposit',
-            'method': method,
-          });
+          .doc(transactionId);
 
-      await FirebaseFirestore.instance
+      batch.set(savingsRef, {
+        'amount': amount,
+        'date': firestore.FieldValue.serverTimestamp(),
+        'type': 'Deposit',
+        'method': method,
+        'transactionId': transactionId,
+        'userId': memberId,
+        'status': 'Completed',
+      });
+
+      // Add to transactions collection
+      final transactionRef = firestore.FirebaseFirestore.instance
           .collection('users')
           .doc(memberId)
           .collection('transactions')
-          .add({
-            'amount': amount,
-            'date': DateTime.now(),
-            'type': 'Deposit',
-            'status': 'Completed',
-            'method': method,
-          });
+          .doc(transactionId);
 
+      batch.set(transactionRef, {
+        'amount': amount,
+        'date': firestore.FieldValue.serverTimestamp(),
+        'type': 'Deposit',
+        'status': 'Completed',
+        'method': method,
+        'transactionId': transactionId,
+        'userId': memberId,
+        'description': 'Deposit via $method',
+      });
+
+      // Commit the batch
+      await batch.commit();
+
+      print('✅ Deposit transaction committed successfully');
+      print('📊 Savings record created: ${savingsRef.id}');
+      print('📊 Transaction record created: ${transactionRef.id}');
+
+      // Update local state immediately for responsive UI
       setState(() {
         _currentSavings += amount;
       });
 
-      _fetchSavingsData();
+      print('💰 Balance updated locally: ${_formatCurrency(_currentSavings)}');
+
+      // Refresh data from database to ensure consistency
+      await _fetchSavingsData();
+      await _fetchTransactionHistory();
+
+      print('✅ Data refreshed successfully');
+      print('💰 Final balance from database: ${_formatCurrency(_currentSavings)}');
+      print('📊 Total transactions: ${_transactions.length}');
+      print('📊 Total savings records: ${_savingsHistory.length}');
+
+      // Verify the transaction was actually saved
+      final verificationDoc = await firestore.FirebaseFirestore.instance
+          .collection('users')
+          .doc(memberId)
+          .collection('transactions')
+          .doc(transactionId)
+          .get();
+
+      if (verificationDoc.exists) {
+        print('✅ Transaction verification successful: ${verificationDoc.data()}');
+      } else {
+        print('❌ Transaction verification failed: Document not found');
+      }
+
     } catch (e) {
+      print('❌ Error processing deposit: $e');
       _speakAndWaitForResponse(
         "Error processing deposit. Please try again or contact support.",
       );

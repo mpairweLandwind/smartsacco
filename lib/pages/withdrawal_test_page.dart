@@ -494,19 +494,31 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
         backgroundColor: const Color(0xFF007C91),
         elevation: 0,
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildHeader(),
-            const SizedBox(height: 24),
-            _buildTestForm(),
-            const SizedBox(height: 24),
-            _buildCurrentBalance(),
-            const SizedBox(height: 24),
-            _buildTestResults(),
-          ],
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minHeight:
+                  MediaQuery.of(context).size.height -
+                  MediaQuery.of(context).padding.top -
+                  MediaQuery.of(context).padding.bottom -
+                  100, // Account for AppBar
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildHeader(),
+                const SizedBox(height: 20), // Reduced from 24
+                _buildTestForm(),
+                const SizedBox(height: 20), // Reduced from 24
+                _buildCurrentBalance(),
+                const SizedBox(height: 20), // Reduced from 24
+                Flexible(child: _buildTestResults()),
+                const SizedBox(height: 20), // Bottom padding
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -515,7 +527,7 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
   Widget _buildHeader() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16), // Reduced from 20
       decoration: BoxDecoration(
         gradient: const LinearGradient(
           colors: [Color(0xFF007C91), Color(0xFF005A6B)],
@@ -528,14 +540,18 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
           Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(10), // Reduced from 12
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.2),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Icon(Icons.science, color: Colors.white, size: 24),
+                child: const Icon(
+                  Icons.science,
+                  color: Colors.white,
+                  size: 22,
+                ), // Reduced from 24
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 12), // Reduced from 16
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -543,7 +559,7 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
                     Text(
                       'Withdrawal Method Test',
                       style: GoogleFonts.poppins(
-                        fontSize: 20,
+                        fontSize: 18, // Reduced from 20
                         fontWeight: FontWeight.bold,
                         color: Colors.white,
                       ),
@@ -551,7 +567,7 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
                     Text(
                       'Comprehensive withdrawal functionality testing',
                       style: GoogleFonts.poppins(
-                        fontSize: 14,
+                        fontSize: 13, // Reduced from 14
                         color: Colors.white.withOpacity(0.9),
                       ),
                     ),
@@ -567,7 +583,7 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
 
   Widget _buildTestForm() {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16), // Reduced from 20
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
@@ -585,11 +601,11 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
           Text(
             'Test Parameters',
             style: GoogleFonts.poppins(
-              fontSize: 18,
+              fontSize: 16, // Reduced from 18
               fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12), // Reduced from 16
           TextField(
             controller: _amountController,
             keyboardType: TextInputType.number,
@@ -601,7 +617,7 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12), // Reduced from 16
           TextField(
             controller: _phoneController,
             keyboardType: TextInputType.phone,
@@ -613,7 +629,7 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12), // Reduced from 16
           DropdownButtonFormField<String>(
             value: _selectedMethod,
             decoration: InputDecoration(
@@ -634,10 +650,10 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
               });
             },
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 20), // Reduced from 24
           SizedBox(
             width: double.infinity,
-            height: 50,
+            height: 48, // Reduced from 50
             child: ElevatedButton(
               onPressed: _isLoading ? null : _testWithdrawal,
               style: ElevatedButton.styleFrom(
@@ -651,7 +667,7 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
                   : Text(
                       'Run Withdrawal Test',
                       style: GoogleFonts.poppins(
-                        fontSize: 16,
+                        fontSize: 15, // Reduced from 16
                         fontWeight: FontWeight.w600,
                         color: Colors.white,
                       ),
@@ -665,7 +681,7 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
 
   Widget _buildCurrentBalance() {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16), // Reduced from 20
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
@@ -683,13 +699,13 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
           Text(
             'Current Balance',
             style: GoogleFonts.poppins(
-              fontSize: 18,
+              fontSize: 16, // Reduced from 18
               fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12), // Reduced from 16
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(14), // Reduced from 16
             decoration: BoxDecoration(
               color: Colors.blue[50],
               borderRadius: BorderRadius.circular(12),
@@ -698,11 +714,11 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
             child: Row(
               children: [
                 Icon(Icons.account_balance_wallet, color: Colors.blue[600]),
-                const SizedBox(width: 12),
+                const SizedBox(width: 10), // Reduced from 12
                 Text(
                   _formatCurrency(_currentSavings),
                   style: GoogleFonts.poppins(
-                    fontSize: 24,
+                    fontSize: 22, // Reduced from 24
                     fontWeight: FontWeight.bold,
                     color: Colors.blue[800],
                   ),
@@ -718,7 +734,7 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
   Widget _buildTestResults() {
     if (_testHistory.isEmpty) {
       return Container(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(16), // Reduced from 20
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(16),
@@ -733,14 +749,17 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
         child: Center(
           child: Text(
             'No test results yet. Run a test to see results.',
-            style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey[600]),
+            style: GoogleFonts.poppins(
+              fontSize: 14,
+              color: Colors.grey[600],
+            ), // Reduced from 16
           ),
         ),
       );
     }
 
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16), // Reduced from 20
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
@@ -758,11 +777,11 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
           Text(
             'Test Results',
             style: GoogleFonts.poppins(
-              fontSize: 18,
+              fontSize: 16, // Reduced from 18
               fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12), // Reduced from 16
           ..._testHistory.map((result) => _buildTestResultItem(result)),
         ],
       ),
@@ -776,8 +795,8 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
     final timestamp = result['timestamp'] as DateTime;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.only(bottom: 8), // Reduced from 12
+      padding: const EdgeInsets.all(12), // Reduced from 16
       decoration: BoxDecoration(
         color: passed ? Colors.green[50] : Colors.red[50],
         borderRadius: BorderRadius.circular(12),
@@ -793,29 +812,32 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
               Icon(
                 passed ? Icons.check_circle : Icons.error,
                 color: passed ? Colors.green : Colors.red,
-                size: 20,
+                size: 18, // Reduced from 20
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   testName,
                   style: GoogleFonts.poppins(
-                    fontSize: 16,
+                    fontSize: 14, // Reduced from 16
                     fontWeight: FontWeight.w600,
                     color: passed ? Colors.green[800] : Colors.red[800],
                   ),
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 6,
+                  vertical: 2,
+                ), // Reduced from 8,4
                 decoration: BoxDecoration(
                   color: passed ? Colors.green : Colors.red,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(8), // Reduced from 12
                 ),
                 child: Text(
                   passed ? 'PASS' : 'FAIL',
                   style: GoogleFonts.poppins(
-                    fontSize: 10,
+                    fontSize: 9, // Reduced from 10
                     fontWeight: FontWeight.bold,
                     color: Colors.white,
                   ),
@@ -823,15 +845,21 @@ class _WithdrawalTestPageState extends State<WithdrawalTestPage> {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6), // Reduced from 8
           Text(
             message,
-            style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[700]),
+            style: GoogleFonts.poppins(
+              fontSize: 13,
+              color: Colors.grey[700],
+            ), // Reduced from 14
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 2), // Reduced from 4
           Text(
             '${timestamp.hour}:${timestamp.minute.toString().padLeft(2, '0')}',
-            style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[500]),
+            style: GoogleFonts.poppins(
+              fontSize: 11,
+              color: Colors.grey[500],
+            ), // Reduced from 12
           ),
         ],
       ),

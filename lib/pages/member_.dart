@@ -205,7 +205,7 @@ class _MemberDashboardState extends State<MemberDashboard> {
           date: doc['date']?.toDate() ?? DateTime.now(),
           type: NotificationType.values[doc['type'] ?? 0],
           isRead: isRead,
-          actionUrl: doc['actionUrl'],
+          actionUrl: doc['actionUrl'] ?? null,
         ),
       );
     }

@@ -63,7 +63,7 @@ class OverviewPageState extends State<OverviewPage> {
       List<Map<String, dynamic>> transactions = [];
 
       for (var doc in snapshot.docs) {
-        final data = doc.data();
+        final data = doc.data() as Map<String, dynamic>;
         final userId = doc.reference.parent.parent?.id;
 
         // Fetch user details if available
@@ -135,7 +135,7 @@ class OverviewPageState extends State<OverviewPage> {
 
       final transactions = snapshot.docs
           .map((doc) {
-            final data = doc.data();
+            final data = doc.data() as Map<String, dynamic>;
             return {
               'id': doc.id,
               'description': '${data['type']} via ${data['method']}',

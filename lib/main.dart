@@ -15,7 +15,7 @@ import 'firebase_options.dart';
 import 'package:smartsacco/pages/voicewelcome.dart';
 import 'package:smartsacco/pages/voiceregister.dart';
 import 'package:smartsacco/pages/voicelogin.dart';
-import 'package:smartsacco/pages/voice_settings.dart';
+
 import 'package:smartsacco/utils/logger.dart';
 import 'package:smartsacco/services/notification_service.dart';
 import 'package:app_links/app_links.dart';
@@ -130,13 +130,11 @@ class _SaccoDashboardAppState extends State<SaccoDashboardApp> {
         '/voiceWelcome': (context) => const VoiceWelcomeScreen(),
         '/voiceRegister': (context) => const VoiceRegisterPage(),
         '/voiceLogin': (context) => const VoiceLoginPage(),
-        '/voiceRegister': (context) => const VoiceRegisterPage(),
         '/member-dashboard': (context) => const MemberDashboard(),
         '/admin-dashboard': (context) => const AdminMainPage(),
         '/members': (context) => const MembersPage(),
         '/blindmember': (context) => const VoiceMemberDashboard(),
         '/settings': (context) => const SettingsPage(),
-        '/voiceSettings': (context) => const VoiceSettingsPage(),
         '/email_verification': (context) => EmailVerificationScreen(
           userEmail:
               (ModalRoute.of(context)?.settings.arguments
