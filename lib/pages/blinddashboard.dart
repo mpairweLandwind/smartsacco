@@ -102,7 +102,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
       print('Speech recognition initialized: $_speechEnabled');
     } catch (e) {
       print('Error initializing speech recognition: $e');
-    
+
       _speechEnabled = false;
     }
     setState(() {});
@@ -537,16 +537,35 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
         _logout();
         break;
       case VoiceAction.deposit:
-        // Directly process the deposit
-        _processDeposit(_pendingAmount, 'Voice Deposit');
-        _speakAndWaitForResponse(
-          "Deposit successful. Your new balance is ${_formatCurrencyForSpeech(_currentSavings + _pendingAmount)} Uganda Shillings. "
-          "Would you like to hear the main menu? Say yes for menu.",
-        );
-        _resetVoiceState();
+        // Process the deposit and wait for completion before speaking
+        _processDepositAndSpeakResult(_pendingAmount, 'Voice Deposit');
         break;
       default:
         _returnToMainMenu();
+    }
+  }
+
+  Future<void> _processDepositAndSpeakResult(
+    double amount,
+    String method,
+  ) async {
+    try {
+      // Process the deposit
+      await _processDeposit(amount, method);
+
+      // Now speak the result with the updated balance from database
+      _speakAndWaitForResponse(
+        "Deposit successful. Your new balance is ${_formatCurrencyForSpeech(_currentSavings)} Uganda Shillings. "
+        "Would you like to hear the main menu? Say yes for menu.",
+      );
+      _resetVoiceState();
+    } catch (e) {
+      print('❌ Error in deposit process: $e');
+      _speakAndWaitForResponse(
+        "Error processing deposit. Please try again or contact support. "
+        "Would you like to hear the main menu? Say yes for menu.",
+      );
+      _resetVoiceState();
     }
   }
 
@@ -802,7 +821,8 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
                   reference: p['reference'] ?? '',
                 ),
               )
-              .toList(), monthlyPayment: 0,
+              .toList(),
+          monthlyPayment: 0,
         ),
       );
     }
@@ -851,7 +871,9 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
     try {
       print('🔄 Processing deposit: $amount via $method');
       print('👤 User ID: $memberId');
-      print('💰 Current balance before deposit: ${_formatCurrency(_currentSavings)}');
+      print(
+        '💰 Current balance before deposit: ${_formatCurrency(_currentSavings)}',
+      );
 
       // Generate unique transaction ID
       final transactionId = DateTime.now().millisecondsSinceEpoch.toString();
@@ -914,7 +936,9 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
       await _fetchTransactionHistory();
 
       print('✅ Data refreshed successfully');
-      print('💰 Final balance from database: ${_formatCurrency(_currentSavings)}');
+      print(
+        '💰 Final balance from database: ${_formatCurrency(_currentSavings)}',
+      );
       print('📊 Total transactions: ${_transactions.length}');
       print('📊 Total savings records: ${_savingsHistory.length}');
 
@@ -927,11 +951,12 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
           .get();
 
       if (verificationDoc.exists) {
-        print('✅ Transaction verification successful: ${verificationDoc.data()}');
+        print(
+          '✅ Transaction verification successful: ${verificationDoc.data()}',
+        );
       } else {
         print('❌ Transaction verification failed: Document not found');
       }
-
     } catch (e) {
       print('❌ Error processing deposit: $e');
       _speakAndWaitForResponse(

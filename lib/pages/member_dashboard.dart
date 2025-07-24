@@ -357,9 +357,6 @@ class _MemberDashboardState extends State<MemberDashboard> {
                 type: loanData['type'] ?? 'Personal',
                 interestRate: loanData['interestRate']?.toDouble() ?? 12.0,
                 totalRepayment: loanData['totalRepayment']?.toDouble() ?? 0,
-                monthlyPayment:
-                    loanData['monthlyPayment']?.toDouble() ??
-                    0, // ✅ Added monthlyPayment
                 repaymentPeriod: loanData['repaymentPeriod']?.toInt() ?? 12,
                 payments: payments.docs
                     .map(
@@ -389,9 +386,6 @@ class _MemberDashboardState extends State<MemberDashboard> {
                 type: loanData['type'] ?? 'Personal',
                 interestRate: loanData['interestRate']?.toDouble() ?? 12.0,
                 totalRepayment: loanData['totalRepayment']?.toDouble() ?? 0,
-                monthlyPayment:
-                    loanData['monthlyPayment']?.toDouble() ??
-                    0, // ✅ Added monthlyPayment
                 repaymentPeriod: loanData['repaymentPeriod']?.toInt() ?? 12,
                 payments: [],
               ),
@@ -794,8 +788,6 @@ class _MemberDashboardState extends State<MemberDashboard> {
           const SizedBox(height: 20),
           _buildQuickActionsSection(),
           const SizedBox(height: 20),
-          _buildMonthlyPaymentsSection(),
-          const SizedBox(height: 20),
           _buildDuePaymentsSection(),
           const SizedBox(height: 20),
           _buildRecentTransactions(),
@@ -1029,7 +1021,13 @@ class _MemberDashboardState extends State<MemberDashboard> {
           children: [
             GestureDetector(
               onTap: () => _showTotalDueDetails(),
-              child: _buildEnhancedTotalDueCard(totalDue),
+              child: _buildStatCard(
+                'Total Due',
+                _formatCurrency(totalDue),
+                _totalDueColor,
+                Icons.payment,
+                subtitle: 'Loan Repayments',
+              ),
             ),
             GestureDetector(
               onTap: () => setState(() => _currentIndex = 2),
@@ -1044,263 +1042,6 @@ class _MemberDashboardState extends State<MemberDashboard> {
           ],
         ),
       ],
-    );
-  }
-
-  Widget _buildEnhancedTotalDueCard(double totalDue) {
-    // Calculate breakdown of total due
-    final overdueLoans = _loans.where((loan) {
-      if (loan.status != 'Active' && loan.status != 'Approved') return false;
-      final nextPaymentDate = loan.payments.isEmpty
-          ? loan.disbursementDate.add(const Duration(days: 30))
-          : loan.payments.last.date.add(const Duration(days: 30));
-      return nextPaymentDate.difference(DateTime.now()).inDays < 0;
-    }).toList();
-
-    final dueSoonLoans = _loans.where((loan) {
-      if (loan.status != 'Active' && loan.status != 'Approved') return false;
-      final nextPaymentDate = loan.payments.isEmpty
-          ? loan.disbursementDate.add(const Duration(days: 30))
-          : loan.payments.last.date.add(const Duration(days: 30));
-      final daysUntilPayment = nextPaymentDate
-          .difference(DateTime.now())
-          .inDays;
-      return daysUntilPayment <= 7 && daysUntilPayment >= 0;
-    }).toList();
-
-    final overdueAmount = overdueLoans.fold(0.0, (acc, loan) {
-      final nextPaymentDate = loan.payments.isEmpty
-          ? loan.disbursementDate.add(const Duration(days: 30))
-          : loan.payments.last.date.add(const Duration(days: 30));
-      final daysUntilPayment = nextPaymentDate
-          .difference(DateTime.now())
-          .inDays;
-      final overdueMonths = (daysUntilPayment.abs() / 30).ceil();
-      return acc + (loan.monthlyPayment * overdueMonths);
-    });
-
-    final dueSoonAmount = dueSoonLoans.fold(
-      0.0,
-      (acc, loan) => acc + loan.monthlyPayment,
-    );
-
-    // Determine the color based on the breakdown
-    Color cardColor = _totalDueColor;
-    String statusText = 'Loan Repayments';
-
-    if (overdueAmount > 0) {
-      cardColor = Colors.red;
-      statusText =
-          'Overdue: ${overdueLoans.length} loan${overdueLoans.length > 1 ? 's' : ''}';
-    } else if (dueSoonAmount > 0) {
-      cardColor = Colors.orange;
-      statusText =
-          'Due Soon: ${dueSoonLoans.length} loan${dueSoonLoans.length > 1 ? 's' : ''}';
-    } else if (totalDue > 0) {
-      cardColor = _totalDueColor;
-      statusText = 'Upcoming Payments';
-    } else {
-      cardColor = Colors.green;
-      statusText = 'All Caught Up';
-    }
-
-    // Get screen dimensions for responsive design
-    final screenWidth = MediaQuery.of(context).size.width;
-    final isSmallScreen = screenWidth < 400;
-
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [cardColor, cardColor.withOpacity(0.8)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: cardColor.withOpacity(0.3),
-            blurRadius: 8,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Padding(
-        padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  totalDue > 0 ? Icons.payment : Icons.check_circle,
-                  color: Colors.white,
-                  size: isSmallScreen ? 20 : 24,
-                ),
-                if (overdueAmount > 0) ...[
-                  const SizedBox(width: 4),
-                  Icon(
-                    Icons.warning,
-                    color: Colors.white,
-                    size: isSmallScreen ? 16 : 20,
-                  ),
-                ],
-              ],
-            ),
-            SizedBox(height: isSmallScreen ? 6 : 8),
-            Flexible(
-              child: Text(
-                'Total Due',
-                style: GoogleFonts.poppins(
-                  color: Colors.white,
-                  fontSize: isSmallScreen ? 12 : 14,
-                  fontWeight: FontWeight.w500,
-                ),
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Flexible(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  _formatCurrency(totalDue),
-                  style: GoogleFonts.poppins(
-                    color: Colors.white,
-                    fontSize: isSmallScreen ? 16 : 20,
-                    fontWeight: FontWeight.bold,
-                  ),
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ),
-            const SizedBox(height: 4),
-            Flexible(
-              child: Text(
-                statusText,
-                style: GoogleFonts.poppins(
-                  color: Colors.white.withOpacity(0.8),
-                  fontSize: isSmallScreen ? 9 : 10,
-                  fontWeight: FontWeight.w400,
-                ),
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            if (overdueAmount > 0 || dueSoonAmount > 0) ...[
-              const SizedBox(height: 4),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  overdueAmount > 0
-                      ? '${overdueLoans.length} overdue'
-                      : '${dueSoonLoans.length} due soon',
-                  style: GoogleFonts.poppins(
-                    color: Colors.white,
-                    fontSize: isSmallScreen ? 8 : 9,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStatCard(
-    String title,
-    String value,
-    Color color,
-    IconData icon, {
-    String? subtitle,
-  }) {
-    // Get screen dimensions for responsive design
-    final screenWidth = MediaQuery.of(context).size.width;
-    final isSmallScreen = screenWidth < 400;
-
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [color, color.withOpacity(0.8)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: color.withOpacity(0.3),
-            blurRadius: 8,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Padding(
-        padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: Colors.white, size: isSmallScreen ? 24 : 28),
-            SizedBox(height: isSmallScreen ? 6 : 8),
-            Flexible(
-              child: Text(
-                title,
-                style: GoogleFonts.poppins(
-                  color: Colors.white,
-                  fontSize: isSmallScreen ? 12 : 14,
-                  fontWeight: FontWeight.w500,
-                ),
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Flexible(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  value,
-                  style: GoogleFonts.poppins(
-                    color: Colors.white,
-                    fontSize: isSmallScreen ? 16 : 20,
-                    fontWeight: FontWeight.bold,
-                  ),
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ),
-            if (subtitle != null) ...[
-              const SizedBox(height: 4),
-              Flexible(
-                child: Text(
-                  subtitle,
-                  style: GoogleFonts.poppins(
-                    color: Colors.white.withOpacity(0.8),
-                    fontSize: isSmallScreen ? 9 : 10,
-                    fontWeight: FontWeight.w400,
-                  ),
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
     );
   }
 
@@ -1449,37 +1190,37 @@ class _MemberDashboardState extends State<MemberDashboard> {
     );
   }
 
-  Widget _buildMonthlyPaymentsSection() {
-    final activeLoans = _loans
-        .where((loan) => loan.status == 'Active' || loan.status == 'Approved')
+  Widget _buildDuePaymentsSection() {
+    final duePayments = _loans
+        .where((loan) => loan.status == 'Active' || loan.status == 'Overdue')
         .toList();
 
-    if (activeLoans.isEmpty) {
+    if (duePayments.isEmpty) {
       return Container(
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: Colors.blue.withOpacity(0.1),
+          color: Colors.green.withOpacity(0.1),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.blue.withOpacity(0.3)),
+          border: Border.all(color: Colors.green.withOpacity(0.3)),
         ),
         child: Column(
           children: [
-            Icon(Icons.check_circle, size: 40, color: Colors.blue),
+            Icon(Icons.check_circle, size: 40, color: Colors.green),
             const SizedBox(height: 12),
             Text(
-              'No Active Loans',
+              'No Due Payments',
               style: GoogleFonts.poppins(
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
-                color: Colors.blue,
+                color: Colors.green,
               ),
             ),
             const SizedBox(height: 4),
             Text(
-              'You have no active loans requiring monthly payments',
+              'You have no active or overdue loans at this time',
               style: GoogleFonts.poppins(
                 fontSize: 12,
-                color: Colors.blue.withOpacity(0.7),
+                color: Colors.green.withOpacity(0.7),
               ),
               textAlign: TextAlign.center,
             ),
@@ -1503,126 +1244,70 @@ class _MemberDashboardState extends State<MemberDashboard> {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(Icons.payment, color: Colors.orange, size: 20),
-              ),
-              const SizedBox(width: 12),
+              Icon(Icons.payment, color: _primaryColor, size: 20),
+              const SizedBox(width: 8),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Monthly Loan Payments',
-                      style: GoogleFonts.poppins(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: _textSecondary,
-                      ),
-                    ),
-                    Text(
-                      '${activeLoans.length} active loan${activeLoans.length > 1 ? 's' : ''}',
-                      style: GoogleFonts.poppins(
-                        fontSize: 12,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.orange,
-                  borderRadius: BorderRadius.circular(12),
-                ),
                 child: Text(
-                  '${activeLoans.length}',
+                  'Loan Repayments Due',
                   style: GoogleFonts.poppins(
-                    fontSize: 12,
+                    fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    color: Colors.white,
+                    color: _textSecondary,
                   ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
           ),
           const SizedBox(height: 16),
-          ...activeLoans.map((loan) => _buildMonthlyPaymentCard(loan)).toList(),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: duePayments
+                .map((loan) => _buildLoanDueCard(loan))
+                .toList(),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildMonthlyPaymentCard(Loan loan) {
+  Widget _buildLoanDueCard(Loan loan) {
+    final isOverdue = loan.status == 'Overdue';
     final nextPaymentDate = loan.payments.isEmpty
         ? loan.disbursementDate.add(const Duration(days: 30))
         : loan.payments.last.date.add(const Duration(days: 30));
-    final daysUntilPayment = nextPaymentDate.difference(DateTime.now()).inDays;
-    final nextPaymentAmount = loan.nextPaymentAmount;
-    final isOverdue = daysUntilPayment < 0;
-    final isDueSoon = daysUntilPayment <= 7 && daysUntilPayment >= 0;
+    final daysRemaining = nextPaymentDate.difference(DateTime.now()).inDays;
+    final nextPaymentAmount = loan.totalRepayment / loan.repaymentPeriod;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: isOverdue
-            ? Colors.red.withOpacity(0.05)
-            : isDueSoon
-            ? Colors.orange.withOpacity(0.05)
-            : Colors.green.withOpacity(0.05),
+            ? Colors.red.withOpacity(0.1)
+            : Colors.orange.withOpacity(0.1),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isOverdue
-              ? Colors.red.withOpacity(0.3)
-              : isDueSoon
-              ? Colors.orange.withOpacity(0.3)
-              : Colors.green.withOpacity(0.3),
+          color: isOverdue ? Colors.red : Colors.orange,
           width: 1,
         ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          // Header row
+          // Header row with overflow protection
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: isOverdue
-                      ? Colors.red.withOpacity(0.1)
-                      : isDueSoon
-                      ? Colors.orange.withOpacity(0.1)
-                      : Colors.green.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(
-                  isOverdue
-                      ? Icons.warning
-                      : isDueSoon
-                      ? Icons.schedule
-                      : Icons.check_circle,
-                  color: isOverdue
-                      ? Colors.red
-                      : isDueSoon
-                      ? Colors.orange
-                      : Colors.green,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
                       'Loan ${loan.id.substring(0, 8)}',
@@ -1631,33 +1316,32 @@ class _MemberDashboardState extends State<MemberDashboard> {
                         fontWeight: FontWeight.w600,
                         color: _textSecondary,
                       ),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
                     ),
+                    const SizedBox(height: 4),
                     Text(
-                      '${loan.type} Loan',
+                      _formatCurrency(nextPaymentAmount),
                       style: GoogleFonts.poppins(
-                        fontSize: 12,
-                        color: Colors.grey[600],
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: isOverdue ? Colors.red : Colors.orange,
                       ),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
                     ),
                   ],
                 ),
               ),
+              const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: isOverdue
-                      ? Colors.red
-                      : isDueSoon
-                      ? Colors.orange
-                      : Colors.green,
+                  color: isOverdue ? Colors.red : Colors.orange,
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
-                  isOverdue
-                      ? 'OVERDUE'
-                      : isDueSoon
-                      ? 'DUE SOON'
-                      : 'ON TRACK',
+                  isOverdue ? 'OVERDUE' : 'DUE',
                   style: GoogleFonts.poppins(
                     fontSize: 10,
                     fontWeight: FontWeight.bold,
@@ -1668,121 +1352,28 @@ class _MemberDashboardState extends State<MemberDashboard> {
             ],
           ),
           const SizedBox(height: 12),
-
-          // Payment details
+          // Action row with overflow protection
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Monthly Payment',
-                      style: GoogleFonts.poppins(
-                        fontSize: 12,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                    Text(
-                      _formatCurrency(nextPaymentAmount),
-                      style: GoogleFonts.poppins(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: _textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Remaining Balance',
-                      style: GoogleFonts.poppins(
-                        fontSize: 12,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                    Text(
-                      _formatCurrency(loan.remainingBalance),
-                      style: GoogleFonts.poppins(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: _textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-
-          // Payment date and action
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Next Payment Date',
-                      style: GoogleFonts.poppins(
-                        fontSize: 12,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                    Text(
-                      DateFormat('MMM d, y').format(nextPaymentDate),
-                      style: GoogleFonts.poppins(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: isOverdue
-                            ? Colors.red
-                            : isDueSoon
-                            ? Colors.orange
-                            : Colors.green,
-                      ),
-                    ),
-                    Text(
-                      isOverdue
-                          ? 'Overdue by ${daysUntilPayment.abs()} days'
-                          : isDueSoon
-                          ? 'Due in $daysUntilPayment days'
-                          : 'In ${daysUntilPayment} days',
-                      style: GoogleFonts.poppins(
-                        fontSize: 11,
-                        color: isOverdue
-                            ? Colors.red
-                            : isDueSoon
-                            ? Colors.orange
-                            : Colors.green,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              ElevatedButton.icon(
-                onPressed: () => _showEnhancedPaymentDialog(loan),
-                icon: Icon(
-                  isOverdue ? Icons.payment : Icons.payment_outlined,
-                  size: 16,
-                ),
-                label: Text(
-                  isOverdue ? 'Pay Now' : 'Make Payment',
+                child: Text(
+                  isOverdue
+                      ? 'Overdue by ${daysRemaining.abs()} days'
+                      : 'Due in $daysRemaining days',
                   style: GoogleFonts.poppins(
                     fontSize: 12,
-                    fontWeight: FontWeight.w600,
+                    color: isOverdue ? Colors.red : Colors.orange,
                   ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
                 ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton(
+                onPressed: () => _makePayment(loan),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: isOverdue
-                      ? Colors.red
-                      : isDueSoon
-                      ? Colors.orange
-                      : Colors.green,
+                  backgroundColor: isOverdue ? Colors.red : Colors.orange,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(
                     horizontal: 16,
@@ -1792,6 +1383,13 @@ class _MemberDashboardState extends State<MemberDashboard> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                 ),
+                child: Text(
+                  'Pay Now',
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ],
           ),
@@ -1800,393 +1398,299 @@ class _MemberDashboardState extends State<MemberDashboard> {
     );
   }
 
-  void _showEnhancedPaymentDialog(Loan loan) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            Icon(Icons.payment, color: Colors.orange[600]),
-            const SizedBox(width: 8),
-            Text(
-              'Loan Payment',
-              style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-            ),
-          ],
+  Widget _buildRecentTransactions() {
+    if (_transactions.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.grey.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey.withOpacity(0.3)),
         ),
-        content: Column(
+        child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildPaymentSummaryCard(loan),
-            const SizedBox(height: 16),
+            Icon(Icons.receipt_long, size: 40, color: Colors.grey),
+            const SizedBox(height: 12),
             Text(
-              'Payment Options',
+              'No Recent Transactions',
               style: GoogleFonts.poppins(
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
-                color: _textSecondary,
+                color: Colors.grey,
               ),
+              textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 12),
-            _buildPaymentOption(
-              'Pay Full Amount',
-              _formatCurrency(loan.nextPaymentAmount),
-              Icons.payment,
-              Colors.green,
-              () {
-                Navigator.pop(context);
-                _makePayment(loan);
-              },
-            ),
-            const SizedBox(height: 8),
-            _buildPaymentOption(
-              'Pay Partial Amount',
-              'Custom amount',
-              Icons.edit,
-              Colors.blue,
-              () {
-                Navigator.pop(context);
-                _showPartialPaymentDialog(loan);
-              },
+            const SizedBox(height: 4),
+            Text(
+              'Your transaction history will appear here',
+              style: GoogleFonts.poppins(
+                fontSize: 12,
+                color: Colors.grey.withOpacity(0.7),
+              ),
+              textAlign: TextAlign.center,
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(
-              'Cancel',
-              style: GoogleFonts.poppins(
-                color: Colors.grey[600],
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPaymentSummaryCard(Loan loan) {
-    final nextPaymentDate = loan.payments.isEmpty
-        ? loan.disbursementDate.add(const Duration(days: 30))
-        : loan.payments.last.date.add(const Duration(days: 30));
-    final daysUntilPayment = nextPaymentDate.difference(DateTime.now()).inDays;
-    final isOverdue = daysUntilPayment < 0;
+      );
+    }
 
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: isOverdue
-            ? Colors.red.withOpacity(0.1)
-            : Colors.orange.withOpacity(0.1),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isOverdue
-              ? Colors.red.withOpacity(0.3)
-              : Colors.orange.withOpacity(0.3),
-        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.1),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
-              Icon(
-                Icons.credit_card,
-                color: isOverdue ? Colors.red : Colors.orange,
-                size: 20,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'Loan ${loan.id.substring(0, 8)}',
-                style: GoogleFonts.poppins(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: _textSecondary,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
+          // Header with overflow protection
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Monthly Payment',
-                    style: GoogleFonts.poppins(
-                      fontSize: 12,
-                      color: Colors.grey[600],
+              Expanded(
+                child: Row(
+                  children: [
+                    Icon(Icons.receipt_long, color: _primaryColor, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Recent Transactions',
+                        style: GoogleFonts.poppins(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: _textSecondary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                  ),
-                  Text(
-                    _formatCurrency(loan.nextPaymentAmount),
-                    style: GoogleFonts.poppins(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: _textSecondary,
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    'Due Date',
-                    style: GoogleFonts.poppins(
-                      fontSize: 12,
-                      color: Colors.grey[600],
-                    ),
+              TextButton(
+                onPressed: () => setState(() => _currentIndex = 2),
+                child: Text(
+                  'View All',
+                  style: GoogleFonts.poppins(
+                    color: _primaryColor,
+                    fontWeight: FontWeight.w600,
                   ),
-                  Text(
-                    DateFormat('MMM d').format(nextPaymentDate),
-                    style: GoogleFonts.poppins(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: isOverdue ? Colors.red : Colors.orange,
-                    ),
-                  ),
-                ],
+                ),
               ),
             ],
           ),
+          const SizedBox(height: 12),
+          // Transaction list with overflow protection
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: _transactions
+                .take(3)
+                .map((txn) => _buildTransactionCard(txn))
+                .toList(),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildPaymentOption(
-    String title,
-    String subtitle,
-    IconData icon,
-    Color color,
-    VoidCallback onTap,
-  ) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: color.withOpacity(0.3)),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: color, size: 20),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: GoogleFonts.poppins(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: _textSecondary,
-                    ),
-                  ),
-                  Text(
-                    subtitle,
-                    style: GoogleFonts.poppins(
-                      fontSize: 12,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                ],
-              ),
+  Widget _buildTransactionCard(Transaction txn) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          // Icon container with fixed size
+          Container(
+            width: 36,
+            height: 36,
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: _getStatusColor(txn.status).withOpacity(0.2),
+              borderRadius: BorderRadius.circular(8),
             ),
-            Icon(Icons.arrow_forward_ios, color: color, size: 16),
-          ],
-        ),
+            child: Icon(
+              _getTransactionIcon(txn.type),
+              color: _getStatusColor(txn.status),
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 12),
+          // Main content area with overflow protection
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  txn.type,
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: _textSecondary,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${DateFormat('MMM d').format(txn.date)} • ${txn.method}',
+                  style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Amount and status with overflow protection
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _formatCurrency(txn.amount),
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: _textSecondary,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _getStatusColor(txn.status).withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    txn.status,
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: _getStatusColor(txn.status),
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  void _showPartialPaymentDialog(Loan loan) {
-    final amountController = TextEditingController();
-    amountController.text = loan.nextPaymentAmount.toString();
+  IconData _getTransactionIcon(String type) {
+    switch (type.toLowerCase()) {
+      case 'deposit':
+        return Icons.add_circle;
+      case 'withdrawal':
+        return Icons.remove_circle;
+      case 'loan repayment':
+        return Icons.credit_card;
+      default:
+        return Icons.receipt;
+    }
+  }
 
+  Color _getStatusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'completed':
+        return Colors.green;
+      case 'pending':
+        return Colors.orange;
+      case 'failed':
+        return Colors.red;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  void _showSavingsDetails() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => SavingsDetailsScreen(
+        currentSavings: _currentSavings,
+        savingsHistory: _savingsHistory,
+      ),
+    );
+  }
+
+  void _showActiveLoans() {
+    final activeLoans = _loans
+        .where((loan) => loan.status == 'Active' || loan.status == 'Approved')
+        .toList();
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            Icon(Icons.edit, color: Colors.blue[600]),
-            const SizedBox(width: 8),
-            Text(
-              'Partial Payment',
-              style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Enter the amount you want to pay:',
-              style: GoogleFonts.poppins(fontSize: 14),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: amountController,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                labelText: 'Amount (UGX)',
-                prefixText: 'UGX ',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                helperText:
-                    'Maximum: ${_formatCurrency(loan.remainingBalance)}',
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(
-              'Cancel',
-              style: GoogleFonts.poppins(
-                color: Colors.grey[600],
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final amount = double.tryParse(amountController.text) ?? 0;
-              if (amount > 0 && amount <= loan.remainingBalance) {
-                Navigator.pop(context);
-                _makePartialPayment(loan, amount);
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      amount > loan.remainingBalance
-                          ? 'Amount cannot exceed remaining balance'
-                          : 'Please enter a valid amount',
-                    ),
-                    backgroundColor: Colors.red,
-                  ),
-                );
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.blue,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            child: Text(
-              'Pay',
-              style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-            ),
-          ),
-        ],
+      builder: (context) => _buildEnhancedLoanDetailsDialog(
+        loans: activeLoans,
+        title: 'Active Loans',
+        icon: Icons.check_circle,
+        color: Colors.green,
+        showPaymentButton: true,
       ),
     );
   }
 
-  void _makePartialPayment(Loan loan, double amount) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => MomoPaymentPage(
-          amount: amount,
-          onPaymentComplete: (success) async {
-            if (success) {
-              try {
-                final paymentRef = await FirebaseFirestore.instance
-                    .collection('users')
-                    .doc(memberId)
-                    .collection('loans')
-                    .doc(loan.id)
-                    .collection('payments')
-                    .add({
-                      'amount': amount,
-                      'date': DateTime.now(),
-                      'reference':
-                          'MOMO-${DateTime.now().millisecondsSinceEpoch}',
-                      'type': 'Partial Payment',
-                    });
-
-                await FirebaseFirestore.instance
-                    .collection('users')
-                    .doc(memberId)
-                    .collection('loans')
-                    .doc(loan.id)
-                    .update({
-                      'remainingBalance': loan.remainingBalance - amount,
-                    });
-
-                await FirebaseFirestore.instance
-                    .collection('users')
-                    .doc(memberId)
-                    .collection('transactions')
-                    .add({
-                      'amount': amount,
-                      'date': DateTime.now(),
-                      'type': 'Loan Repayment',
-                      'status': 'Completed',
-                      'method': 'Mobile Money',
-                      'loanId': loan.id,
-                      'paymentId': paymentRef.id,
-                      'description':
-                          'Partial payment for loan ${loan.id.substring(0, 8)}',
-                    });
-
-                await FirebaseFirestore.instance
-                    .collection('users')
-                    .doc(memberId)
-                    .collection('notifications')
-                    .add({
-                      'title': 'Partial Payment Received',
-                      'message':
-                          'Your partial payment of ${_formatCurrency(amount)} for loan ${loan.id.substring(0, 8)} has been received',
-                      'date': DateTime.now(),
-                      'type': NotificationType.payment.index,
-                      'isRead': false,
-                    });
-
-                _fetchLoansData();
-                _fetchNotifications();
-
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Partial payment of ${_formatCurrency(amount)} successful!',
-                    ),
-                    backgroundColor: Colors.green,
-                  ),
-                );
-              } catch (e) {
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Error recording payment: $e'),
-                    backgroundColor: Colors.red,
-                  ),
-                );
-              }
-            }
-          },
-        ),
+  void _showOverdueLoans() {
+    final overdueLoans = _loans
+        .where((loan) => loan.status == 'Overdue')
+        .toList();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => LoansListScreen(
+        loans: overdueLoans,
+        title: 'Overdue Loans',
+        onPayment: _makePayment,
       ),
     );
   }
+
+  void _showTotalDueDetails() {
+    // Calculate detailed breakdown
+    final overdueLoans = _loans.where((loan) {
+      if (loan.status != 'Active' && loan.status != 'Approved') return false;
+      final nextPaymentDate = loan.payments.isEmpty
+          ? loan.disbursementDate.add(const Duration(days: 30))
+          : loan.payments.last.date.add(const Duration(days: 30));
+      return nextPaymentDate.difference(DateTime.now()).inDays < 0;
+    }).toList();
+
+    final dueSoonLoans = _loans.where((loan) {
+      if (loan.status != 'Active' && loan.status != 'Approved') return false;
+      final nextPaymentDate = loan.payments.isEmpty
+          ? loan.disbursementDate.add(const Duration(days: 30))
+          : loan.payments.last.date.add(const Duration(days: 30));
+      final daysUntilPayment = nextPaymentDate
+          .difference(DateTime.now())
+          .inDays;
+      return daysUntilPayment <= 7 && daysUntilPayment >= 0;
+    }).toList();
+
+    final totalDue = _calculateTotalDue();
+
+    showDialog(
 
   Widget _buildDuePaymentsSection() {
     final duePayments = _loans
