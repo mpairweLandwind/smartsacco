@@ -76,7 +76,20 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
     super.initState();
     _initializeSpeech();
     _initializeTts();
-    _fetchTransactions();
+
+    // Check authentication before fetching data
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      memberId = user.uid;
+      print('✅ User authenticated in initState: $memberId');
+      _fetchTransactions();
+    } else {
+      print('❌ No authenticated user in initState');
+      // Redirect to login if not authenticated
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _redirectToLogin();
+      });
+    }
   }
 
   void _initializeSpeech() async {
@@ -292,6 +305,11 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
     command = command.trim();
     print('Processing command: $command');
 
+    // Ensure user is authenticated before processing any commands
+    if (!_ensureUserAuthenticated()) {
+      return;
+    }
+
     if (_waitingForConfirmation) {
       _handleConfirmationResponse(command);
       return;
@@ -391,6 +409,11 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
   }
 
   void _executeChoice(String option) {
+    // Ensure user is authenticated before executing any choice
+    if (!_ensureUserAuthenticated()) {
+      return;
+    }
+
     switch (option) {
       case "3":
         _speakSavingsInfo();
@@ -410,8 +433,12 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
     }
   }
 
-  void _speakSavingsInfo() {
+  void _speakSavingsInfo() async {
     _lastInformationType = 'savings';
+
+    // Refresh savings data before speaking
+    await _fetchSavingsData();
+
     final formattedSavings = _formatCurrencyForSpeech(_currentSavings);
     _speakAndWaitForResponse(
       "Your total savings balance is $formattedSavings Uganda Shillings. "
@@ -420,8 +447,12 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
     );
   }
 
-  void _speakLoansInfo() {
+  void _speakLoansInfo() async {
     _lastInformationType = 'loans';
+
+    // Refresh loans data before speaking
+    await _fetchLoansData();
+
     final activeLoans = _loans
         .where((loan) => loan.status == 'Active')
         .toList();
@@ -460,8 +491,12 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
     _speakAndWaitForResponse(message);
   }
 
-  void _speakDueInfo() {
+  void _speakDueInfo() async {
     _lastInformationType = 'due';
+
+    // Refresh loans data before calculating due amount
+    await _fetchLoansData();
+
     final totalDue = _calculateTotalDue();
     String message = "";
 
@@ -532,6 +567,11 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
   }
 
   void _handleConfirmation() {
+    // Ensure user is authenticated before processing any confirmation
+    if (!_ensureUserAuthenticated()) {
+      return;
+    }
+
     switch (_currentVoiceAction) {
       case VoiceAction.logout:
         _logout();
@@ -550,6 +590,11 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
     String method,
   ) async {
     try {
+      // Ensure user is authenticated before processing deposit
+      if (!_ensureUserAuthenticated()) {
+        return;
+      }
+
       // Process the deposit
       await _processDeposit(amount, method);
 
@@ -610,6 +655,23 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
       _pendingConfirmation = '';
       _lastInformationType = '';
     });
+  }
+
+  // Ensure user is authenticated before processing commands
+  bool _ensureUserAuthenticated() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      print('❌ User not authenticated in voice command');
+      _redirectToLogin();
+      return false;
+    }
+
+    if (memberId.isEmpty) {
+      memberId = user.uid;
+      print('✅ Updated memberId from authenticated user: $memberId');
+    }
+
+    return true;
   }
 
   double _parseSpokenAmount(String spokenAmount) {
@@ -677,29 +739,56 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
 
   // Keep all existing Firebase methods unchanged
   Future<void> _fetchTransactions() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        print('❌ No authenticated user found in _fetchTransactions');
+        return;
+      }
+
       memberId = user.uid;
+      print('✅ User authenticated: $memberId');
 
       final memberDoc = await firestore.FirebaseFirestore.instance
           .collection('users')
           .doc(memberId)
           .get();
 
-      setState(() {
-        memberName = memberDoc['fullName'] ?? 'Member';
-        memberEmail = memberDoc['email'] ?? 'member@sacco.com';
-      });
+      if (memberDoc.exists) {
+        setState(() {
+          memberName = memberDoc['fullName'] ?? 'Member';
+          memberEmail = memberDoc['email'] ?? 'member@sacco.com';
+        });
 
-      _fetchSavingsData();
-      _fetchLoansData();
-      _fetchNotifications();
-      _fetchTransactionHistory();
+        print('✅ Member data loaded: $memberName ($memberEmail)');
+
+        await _fetchSavingsData();
+        await _fetchLoansData();
+        await _fetchNotifications();
+        await _fetchTransactionHistory();
+      } else {
+        print('❌ Member document not found for user: $memberId');
+        // Create a basic member document if it doesn't exist
+        await _createMemberDocument(user.uid);
+      }
+    } catch (e) {
+      print('❌ Error in _fetchTransactions: $e');
     }
   }
 
   Future<void> _fetchTransactionHistory() async {
     try {
+      // Ensure memberId is available
+      if (memberId.isEmpty) {
+        final user = FirebaseAuth.instance.currentUser;
+        if (user != null) {
+          memberId = user.uid;
+        } else {
+          print('❌ No authenticated user for transaction history');
+          return;
+        }
+      }
+
       print('🔄 Fetching transaction history for member: $memberId');
 
       final transactionsSnapshot = await firestore.FirebaseFirestore.instance
@@ -753,6 +842,17 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
   }
 
   Future<void> _fetchSavingsData() async {
+    // Ensure memberId is available
+    if (memberId.isEmpty) {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        memberId = user.uid;
+      } else {
+        print('❌ No authenticated user for savings data');
+        return;
+      }
+    }
+
     final savingsSnapshot = await firestore.FirebaseFirestore.instance
         .collection('users')
         .doc(memberId)
@@ -783,6 +883,17 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
   }
 
   Future<void> _fetchLoansData() async {
+    // Ensure memberId is available
+    if (memberId.isEmpty) {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        memberId = user.uid;
+      } else {
+        print('❌ No authenticated user for loans data');
+        return;
+      }
+    }
+
     final loansSnapshot = await firestore.FirebaseFirestore.instance
         .collection('users')
         .doc(memberId)
@@ -833,6 +944,17 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
   }
 
   Future<void> _fetchNotifications() async {
+    // Ensure memberId is available
+    if (memberId.isEmpty) {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        memberId = user.uid;
+      } else {
+        print('❌ No authenticated user for notifications');
+        return;
+      }
+    }
+
     final notificationsSnapshot = await firestore.FirebaseFirestore.instance
         .collection('users')
         .doc(memberId)
@@ -869,8 +991,19 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
 
   Future<void> _processDeposit(double amount, String method) async {
     try {
+      // Ensure user is authenticated and memberId is available
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        print('❌ No authenticated user found');
+        _speakAndWaitForResponse("Authentication error. Please login again.");
+        return;
+      }
+
+      // Use the authenticated user's ID if memberId is empty
+      final userId = memberId.isNotEmpty ? memberId : user.uid;
+
       print('🔄 Processing deposit: $amount via $method');
-      print('👤 User ID: $memberId');
+      print('👤 User ID: $userId');
       print(
         '💰 Current balance before deposit: ${_formatCurrency(_currentSavings)}',
       );
@@ -885,7 +1018,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
       // Add to savings collection
       final savingsRef = firestore.FirebaseFirestore.instance
           .collection('users')
-          .doc(memberId)
+          .doc(userId)
           .collection('savings')
           .doc(transactionId);
 
@@ -895,14 +1028,14 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
         'type': 'Deposit',
         'method': method,
         'transactionId': transactionId,
-        'userId': memberId,
+        'userId': userId,
         'status': 'Completed',
       });
 
       // Add to transactions collection
       final transactionRef = firestore.FirebaseFirestore.instance
           .collection('users')
-          .doc(memberId)
+          .doc(userId)
           .collection('transactions')
           .doc(transactionId);
 
@@ -913,7 +1046,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
         'status': 'Completed',
         'method': method,
         'transactionId': transactionId,
-        'userId': memberId,
+        'userId': userId,
         'description': 'Deposit via $method',
       });
 
@@ -945,7 +1078,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
       // Verify the transaction was actually saved
       final verificationDoc = await firestore.FirebaseFirestore.instance
           .collection('users')
-          .doc(memberId)
+          .doc(userId)
           .collection('transactions')
           .doc(transactionId)
           .get();
@@ -973,6 +1106,44 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
       MaterialPageRoute(builder: (context) => const LoginPage()),
       (route) => false,
     );
+  }
+
+  void _redirectToLogin() {
+    _speak("Authentication required. Redirecting to login.");
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (context) => const LoginPage()),
+      (route) => false,
+    );
+  }
+
+  // Create a basic member document if it doesn't exist
+  Future<void> _createMemberDocument(String userId) async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+
+      await firestore.FirebaseFirestore.instance
+          .collection('users')
+          .doc(userId)
+          .set({
+            'uid': userId,
+            'email': user.email ?? 'member@sacco.com',
+            'fullName': user.displayName ?? 'Member',
+            'createdAt': firestore.FieldValue.serverTimestamp(),
+            'role': 'member',
+            'status': 'active',
+          });
+
+      setState(() {
+        memberName = user.displayName ?? 'Member';
+        memberEmail = user.email ?? 'member@sacco.com';
+      });
+
+      print('✅ Created member document for user: $userId');
+    } catch (e) {
+      print('❌ Error creating member document: $e');
+    }
   }
 
   double _calculateTotalDue() {
