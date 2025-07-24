@@ -932,8 +932,7 @@ class _VoiceMemberDashboardState extends State<VoiceMemberDashboard> {
                   reference: p['reference'] ?? '',
                 ),
               )
-              .toList(),
-          monthlyPayment: 0,
+              .toList(),          
         ),
       );
     }
